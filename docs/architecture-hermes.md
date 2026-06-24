@@ -10,13 +10,15 @@ Parent and child UI
   -> Model provider behind Hermes
 ```
 
-The local prototype includes a demo Hermes implementation in `packages/hermes-client/src/index.ts` so the app runs without external services. This is not an app-layer agent framework. It is the development stand-in for Hermes and should be replaced with Hermes SDK/API calls in production.
+The local prototype includes a demo Hermes implementation in `packages/hermes-client/src/index.ts` so the app runs without external services. This is not an app-layer agent framework. It is the development stand-in for Hermes.
+
+The real integration path uses one Hermes profile/API server per child profile. See `docs/hermes-real-integration.md`.
 
 ## Runtime Ownership
 
 Hermes owns:
 
-- One dedicated child agent per child profile
+- One dedicated child profile runtime, represented by one Hermes profile/process per child in the MVP deployment
 - Prompt stack assembly
 - Parent policy overlays
 - Skill permissions and runtime

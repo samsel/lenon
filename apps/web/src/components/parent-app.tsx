@@ -340,6 +340,9 @@ function HermesAgentView({
         <div className="table-like">
           {[
             ["Agent type", child.agent.hermesAgentType],
+            ["Hermes profile", child.agent.hermesProfileName ?? "not configured"],
+            ["Isolation mode", child.agent.isolationMode ?? "not configured"],
+            ["Gateway mode", child.agent.gatewayMode ?? "not configured"],
             ["Prompt stack", child.agent.activePromptStackVersion],
             ["Policy pack", child.agent.activePolicyPackVersion],
             ["Model route", child.agent.activeModelRoute],

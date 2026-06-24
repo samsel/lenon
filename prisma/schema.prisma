@@ -59,6 +59,9 @@ model HermesChildAgent {
   id                       String   @id @default(uuid()) @db.Uuid
   childProfileId           String?  @map("child_profile_id") @db.Uuid
   hermesAgentId            String   @unique @map("hermes_agent_id")
+  hermesProfileName        String?  @map("hermes_profile_name")
+  isolationMode            String?  @map("isolation_mode")
+  gatewayMode              String?  @map("gateway_mode")
   hermesAgentType          String   @default("kid_safe_child_agent") @map("hermes_agent_type")
   status                   String   @default("active")
   activePromptStackVersion String?  @map("active_prompt_stack_version")

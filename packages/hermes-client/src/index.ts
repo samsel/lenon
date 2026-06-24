@@ -67,9 +67,18 @@ type HermesDemoState = {
   checkpointAttempts: Record<string, number>;
 };
 
+type HermesRuntimeConfig = {
+  profileName: string;
+  baseUrl: string;
+  apiKey: string;
+  modelName?: string;
+};
+
 declare global {
   // eslint-disable-next-line no-var
   var __kidsafeHermesDemoState: HermesDemoState | undefined;
+  // eslint-disable-next-line no-var
+  var __kidsafeHermesRealAgentOverrides: Record<string, HermesAgentMapping> | undefined;
 }
 
 const clone = <T>(value: T): T => JSON.parse(JSON.stringify(value)) as T;
@@ -230,7 +239,7 @@ const responseFor = (
   return "I can help with that. Let us take it one step at a time, and I will keep the answer safe, clear, and at your level.";
 };
 
-export const createHermesClient = () => {
+const createDemoHermesClient = () => {
   const state = getState();
 
   return {
@@ -254,6 +263,9 @@ export const createHermesClient = () => {
         id: id("mapping"),
         childProfileId: input.childProfileId,
         hermesAgentId,
+        hermesProfileName: hermesAgentId.replace(/^hermes_profile_/, ""),
+        isolationMode: "demo_memory",
+        gatewayMode: "local_demo",
         hermesAgentType: "kid_safe_child_agent",
         status: "active",
         activePromptStackVersion: promptStack(input.ageBand),
@@ -582,6 +594,357 @@ export const createHermesClient = () => {
       return clone(run);
     }
   };
+};
+
+const normalizeBaseUrl = (baseUrl: string) => baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
+
+const parseRuntimeRegistry = () => {
+  const registry: Record<string, HermesRuntimeConfig> = {};
+  const raw = process.env.HERMES_PROFILE_REGISTRY;
+  if (raw) {
+    const parsed = JSON.parse(raw) as
+      | Record<string, HermesRuntimeConfig>
+      | Array<HermesRuntimeConfig & { hermesAgentId: string }>;
+    if (Array.isArray(parsed)) {
+      for (const entry of parsed) {
+        registry[entry.hermesAgentId] = {
+          profileName: entry.profileName,
+          baseUrl: normalizeBaseUrl(entry.baseUrl),
+          apiKey: entry.apiKey,
+          modelName: entry.modelName
+        };
+      }
+    } else {
+      for (const [hermesAgentId, entry] of Object.entries(parsed)) {
+        registry[hermesAgentId] = {
+          profileName: entry.profileName,
+          baseUrl: normalizeBaseUrl(entry.baseUrl),
+          apiKey: entry.apiKey,
+          modelName: entry.modelName
+        };
+      }
+    }
+  }
+
+  if (process.env.HERMES_API_BASE_URL && process.env.HERMES_API_KEY) {
+    const profileName = process.env.HERMES_PROFILE_NAME ?? "default";
+    const hermesAgentId = process.env.HERMES_AGENT_ID ?? `hermes_profile_${profileName}`;
+    registry[hermesAgentId] = {
+      profileName,
+      baseUrl: normalizeBaseUrl(process.env.HERMES_API_BASE_URL),
+      apiKey: process.env.HERMES_API_KEY,
+      modelName: process.env.HERMES_MODEL_NAME ?? profileName
+    };
+  }
+
+  return registry;
+};
+
+const runtimeFor = (hermesAgentId: string) => {
+  const registry = parseRuntimeRegistry();
+  const runtime = registry[hermesAgentId];
+  if (!runtime) {
+    throw new Error(
+      `No real Hermes profile runtime configured for ${hermesAgentId}. Add it to HERMES_PROFILE_REGISTRY or set HERMES_API_BASE_URL/HERMES_API_KEY for a single profile.`
+    );
+  }
+  return runtime;
+};
+
+const hermesJson = async <T>(runtime: HermesRuntimeConfig, path: string, init?: RequestInit) => {
+  const response = await fetch(`${runtime.baseUrl}${path}`, {
+    ...init,
+    headers: {
+      authorization: `Bearer ${runtime.apiKey}`,
+      "content-type": "application/json",
+      ...(init?.headers ?? {})
+    },
+    signal: AbortSignal.timeout(120000)
+  });
+  if (!response.ok) {
+    const body = await response.text().catch(() => "");
+    throw new Error(`Hermes ${path} failed with ${response.status}: ${body.slice(0, 500)}`);
+  }
+  return response.json() as Promise<T>;
+};
+
+const extractResponseText = (payload: unknown) => {
+  const response = payload as {
+    id?: string;
+    output_text?: string;
+    output?: Array<{
+      type?: string;
+      role?: string;
+      content?: Array<{ type?: string; text?: string }>;
+    }>;
+  };
+  if (response.output_text) return response.output_text;
+  for (const item of response.output ?? []) {
+    if (item.type === "message" || item.role === "assistant") {
+      const text = item.content?.find((part) => part.type === "output_text" || part.text)?.text;
+      if (text) return text;
+    }
+  }
+  return "Hermes completed the turn, but the response did not include displayable assistant text.";
+};
+
+const createRealHermesClient = () => {
+  const mirror = createDemoHermesClient();
+  globalThis.__kidsafeHermesRealAgentOverrides ??= {};
+  const realAgentOverrides = globalThis.__kidsafeHermesRealAgentOverrides;
+
+  return {
+    async health() {
+      const registry = parseRuntimeRegistry();
+      const runtimes = Object.values(registry);
+      if (!runtimes.length) {
+        return {
+          status: "missing_config",
+          mode: "real-hermes",
+          projectId: process.env.HERMES_PROJECT_ID ?? "kidsafe-hermes",
+          guarantees: [
+            "Real Hermes mode is enabled, but no child profile API server is configured.",
+            "Configure HERMES_PROFILE_REGISTRY or HERMES_API_BASE_URL/HERMES_API_KEY.",
+            "The browser never receives Hermes API tokens."
+          ]
+        };
+      }
+      const first = runtimes[0];
+      await hermesJson<unknown>(first, "/v1/models", { method: "GET" });
+      return {
+        status: "ok",
+        mode: "real-hermes-profile-api",
+        projectId: process.env.HERMES_PROJECT_ID ?? "kidsafe-hermes",
+        guarantees: [
+          "One child maps to one Hermes profile API server entry",
+          "Child chat calls Hermes /v1/responses server-to-server",
+          "The browser never receives Hermes API tokens"
+        ]
+      };
+    },
+
+    async provisionChildAgent(input: CreateChildAgentInput) {
+      if (process.env.HERMES_PROVISIONER_URL) {
+        const response = await fetch(process.env.HERMES_PROVISIONER_URL, {
+          method: "POST",
+          headers: {
+            "content-type": "application/json",
+            ...(process.env.HERMES_PROVISIONER_KEY
+              ? { authorization: `Bearer ${process.env.HERMES_PROVISIONER_KEY}` }
+              : {})
+          },
+          body: JSON.stringify(input),
+          signal: AbortSignal.timeout(120000)
+        });
+        if (!response.ok) {
+          throw new Error(`Hermes provisioner failed with ${response.status}: ${(await response.text()).slice(0, 500)}`);
+        }
+        return response.json() as Promise<{ mapping: HermesAgentMapping; policy: ParentPolicyCache }>;
+      }
+
+      const result = await mirror.provisionChildAgent(input);
+      const profileName = `child_${input.childProfileId.replace(/[^a-zA-Z0-9_-]/g, "_")}`;
+      result.mapping.hermesAgentId = `hermes_profile_${profileName}`;
+      result.mapping.hermesProfileName = profileName;
+      result.mapping.isolationMode = "hermes_profile_process";
+      result.mapping.gatewayMode = "dedicated_api_server";
+      result.mapping.status = "provisioning";
+      result.mapping.runtimeHealth = "offline";
+      result.policy.hermesAgentId = result.mapping.hermesAgentId;
+      realAgentOverrides[result.mapping.hermesAgentId] = result.mapping;
+      return result;
+    },
+
+    async getAgent(hermesAgentId: string) {
+      if (realAgentOverrides[hermesAgentId]) return clone(realAgentOverrides[hermesAgentId]);
+      return mirror.getAgent(hermesAgentId);
+    },
+
+    async listAgents() {
+      const mirrored = await mirror.listAgents();
+      const overrides = Object.values(realAgentOverrides);
+      const overrideIds = new Set(overrides.map((agent) => agent.hermesAgentId));
+      return [...overrides, ...mirrored.filter((agent) => !overrideIds.has(agent.hermesAgentId))];
+    },
+
+    async updatePolicy(hermesAgentId: string, patch: Partial<ParentPolicyCache>) {
+      return mirror.updatePolicy(hermesAgentId, patch);
+    },
+
+    async pauseAgent(hermesAgentId: string) {
+      return mirror.pauseAgent(hermesAgentId);
+    },
+
+    async resumeAgent(hermesAgentId: string) {
+      return mirror.resumeAgent(hermesAgentId);
+    },
+
+    async getPolicy(hermesAgentId: string) {
+      return mirror.getPolicy(hermesAgentId);
+    },
+
+    async listSkills() {
+      const registry = parseRuntimeRegistry();
+      const runtime = Object.values(registry)[0];
+      if (!runtime) return mirror.listSkills();
+      try {
+        const skills = await hermesJson<Array<{ id?: string; name?: string; description?: string; category?: string }>>(
+          runtime,
+          "/v1/skills",
+          { method: "GET" }
+        );
+        return skills.map((skill, index): Skill => {
+          const name = skill.name ?? skill.id ?? `Hermes skill ${index + 1}`;
+          const skillId = skill.id ?? `hermes_skill_${name.toLowerCase().replace(/[^a-z0-9]+/g, "_")}`;
+          return {
+            id: skillId,
+            name,
+            description: skill.description ?? "Skill discovered from the configured Hermes profile.",
+            category: skill.category ?? "Hermes",
+            ageMin: 6,
+            ageMax: 17,
+            hermesSkillPackageId: skillId,
+            status: "approved",
+            riskLevel: "low",
+            manifest: {
+              id: skillId,
+              version: "discovered",
+              name,
+              creator_id: "hermes_profile",
+              short_description: skill.description ?? "Hermes profile skill",
+              long_description: skill.description ?? "Skill discovered from the configured Hermes profile.",
+              category: skill.category ?? "hermes",
+              age_min: 6,
+              age_max: 17,
+              reading_level: "profile_configured",
+              hermes: {
+                skill_type: "hermes_profile_skill",
+                runs_inside_child_agent: true,
+                prompt_layer_id: "profile_skill",
+                state_schema_id: "profile_skill_state",
+                eval_suite_ids: []
+              },
+              permissions: [],
+              data_access: {
+                reads: [],
+                writes: [],
+                retention_days: 0
+              },
+              safety: {
+                risk_level: "low",
+                blocked_topics: [],
+                requires_parent_approval: true,
+                requires_admin_review: true
+              },
+              monetization: {
+                type: "free",
+                price_cents: 0
+              }
+            }
+          };
+        });
+      } catch {
+        return mirror.listSkills();
+      }
+    },
+
+    async listInstalledSkills(childProfileId: string) {
+      return mirror.listInstalledSkills(childProfileId);
+    },
+
+    async installSkill(input: { childProfileId: string; hermesAgentId: string; skillId: string; approvedBy: string }) {
+      return mirror.installSkill(input);
+    },
+
+    async uninstallSkill(input: { childProfileId: string; hermesAgentId: string; skillId: string }) {
+      return mirror.uninstallSkill(input);
+    },
+
+    async startChildSession(input: { childProfileId: string; hermesAgentId: string }) {
+      const runtime = runtimeFor(input.hermesAgentId);
+      return {
+        sessionId: `kidsafe-${input.childProfileId}`,
+        status: "active" as const,
+        timeRemainingSeconds: 900,
+        intro: `Connected to Hermes profile ${runtime.profileName}.`
+      };
+    },
+
+    async sendChildMessage(input: HermesChatInput): Promise<HermesChatResponse> {
+      const runtime = runtimeFor(input.hermesAgentId);
+      const response = await hermesJson<{ id: string }>(runtime, "/v1/responses", {
+        method: "POST",
+        headers: {
+          "X-Hermes-Session-Id": `kidsafe-${input.childProfileId}`,
+          "X-Hermes-Session-Key": `agent:main:kidsafe:dm:${input.childProfileId}`
+        },
+        body: JSON.stringify({
+          model: runtime.modelName ?? runtime.profileName,
+          input: input.message,
+          conversation: `kidsafe-${input.childProfileId}`,
+          store: true
+        })
+      });
+      const content = extractResponseText(response);
+      const assistantMessage: ChatMessage = {
+        id: response.id ?? id("hermes_msg"),
+        role: "assistant",
+        content,
+        skillId: input.skillId,
+        policyAction: "allow",
+        createdAt: nowIso()
+      };
+
+      return {
+        messageId: assistantMessage.id,
+        hermesAgentId: input.hermesAgentId,
+        response: content,
+        policyAction: "allow",
+        assistantMessage,
+        skillState: {
+          hermesRuntime: "real_api_server",
+          hermesProfileName: runtime.profileName
+        },
+        rewards: [],
+        checkpoint: null,
+        timeRemainingSeconds: 900
+      };
+    },
+
+    async submitCheckpoint(input: {
+      childProfileId: string;
+      hermesAgentId: string;
+      checkpointId: string;
+      answer: string;
+    }) {
+      return mirror.submitCheckpoint(input);
+    },
+
+    async getMessages(childProfileId: string) {
+      return mirror.getMessages(childProfileId);
+    },
+
+    async listPolicyEvents() {
+      return mirror.listPolicyEvents();
+    },
+
+    async listPrompts() {
+      return mirror.listPrompts();
+    },
+
+    async listEvalRuns() {
+      return mirror.listEvalRuns();
+    },
+
+    async runEval(input: { suiteId: string; target: EvalRun["target"]; hermesAgentId?: string }) {
+      return mirror.runEval(input);
+    }
+  };
+};
+
+export const createHermesClient = () => {
+  if (process.env.HERMES_RUNTIME_MODE === "real") return createRealHermesClient();
+  return createDemoHermesClient();
 };
 
 export type HermesClient = ReturnType<typeof createHermesClient>;

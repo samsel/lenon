@@ -12,7 +12,8 @@
     "start": "npm --workspace apps/web run start",
     "lint": "npm --workspace apps/web run lint",
     "typecheck": "npm --workspace apps/web run typecheck",
-    "verify": "npm run typecheck && npm run build"
+    "verify": "npm run typecheck && npm run build",
+    "hermes:provision-child": "node scripts/hermes/provision-child-profile.mjs"
   },
   "engines": {
     "node": ">=20"

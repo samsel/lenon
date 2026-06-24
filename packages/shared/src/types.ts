@@ -72,6 +72,9 @@ export type HermesAgentMapping = {
   id: string;
   childProfileId: string;
   hermesAgentId: string;
+  hermesProfileName?: string;
+  isolationMode?: "hermes_profile" | "hermes_profile_process" | "demo_memory";
+  gatewayMode?: "dedicated_api_server" | "multiplexed_gateway" | "local_demo";
   hermesAgentType: "kid_safe_child_agent";
   status: HermesAgentStatus;
   activePromptStackVersion: string;

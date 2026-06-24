@@ -11,10 +11,11 @@ KidSafe Hermes Runtime is a prototype child-safe AI assistant platform built aro
 - Thin API gateway under `/api/*`
 - Shared product and Hermes types
 - Local Hermes demo backend through `@kidsafe/hermes-client`
+- Real Hermes profile API mode via `HERMES_RUNTIME_MODE=real`
 - Seed family, child profile, Hermes agent mapping, policies, skills, policy events, prompts, and evals
 - Prisma schema matching the spec's product metadata tables
 
-The demo Hermes backend is intentionally located behind the typed Hermes client package. It simulates Hermes for local development only. The app does not call an LLM provider, assemble prompts, execute skills, run evals, or enforce child safety in the app layer.
+The demo Hermes backend is intentionally located behind the typed Hermes client package. It simulates Hermes for local development only. The app does not call an LLM provider directly. In real mode, child chat calls the configured child Hermes profile's `/v1/responses` endpoint server-to-server.
 
 ## Run it
 
@@ -60,9 +61,24 @@ Hermes remains the source of truth for:
 
 Provider secrets such as `OPENAI_API_KEY` do not belong in this app. Model provider keys should live in Hermes configuration.
 
-## Swap local demo Hermes for real Hermes
+## Use Real Hermes
 
-Replace the implementation inside `packages/hermes-client/src/index.ts` with real Hermes SDK/API calls while preserving the exported method names used by the app:
+Real Hermes uses profiles as the isolation primitive. For this product, one child should map to one Hermes profile and one dedicated API server process.
+
+Read [docs/hermes-real-integration.md](docs/hermes-real-integration.md), then set:
+
+```bash
+HERMES_RUNTIME_MODE=real
+HERMES_PROFILE_REGISTRY='{"hermes_profile_child_ava":{"profileName":"child_ava","baseUrl":"http://127.0.0.1:8643","apiKey":"...","modelName":"child_ava"}}'
+```
+
+Provision a child profile:
+
+```bash
+npm run hermes:provision-child -- --child-id child_ava --nickname Ava --age-band 9-12 --profile child_ava --port 8643 --execute
+```
+
+The existing Hermes client methods remain the app boundary:
 
 - `provisionChildAgent`
 - `updatePolicy`

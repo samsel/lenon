@@ -113,15 +113,15 @@ function AgentsView({ data, loading }: { data: AdminOverview | null; loading: bo
         <div className="table-row header">
           <span>Agent</span>
           <span>Status</span>
-          <span>Policy</span>
-          <span>Skills</span>
+          <span>Profile</span>
+          <span>Isolation</span>
         </div>
         {data?.agents.map((agent) => (
           <div className="table-row" key={agent.hermesAgentId}>
             <strong>{agent.hermesAgentId}</strong>
             <StatusPill>{agent.status}</StatusPill>
-            <span>{agent.activePolicyPackVersion}</span>
-            <span>{agent.installedSkillIds.length}</span>
+            <span>{agent.hermesProfileName ?? "unknown"}</span>
+            <span>{agent.isolationMode ?? "unknown"}</span>
           </div>
         ))}
       </section>
