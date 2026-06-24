@@ -1,0 +1,151 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id          String   @id @default(uuid()) @db.Uuid
+  email       String?  @unique
+  passwordHash String? @map("password_hash")
+  role        String
+  displayName String?  @map("display_name")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  createdFamilies Family[] @relation("FamilyCreator")
+
+  @@map("users")
+}
+
+model Family {
+  id        String   @id @default(uuid()) @db.Uuid
+  name      String?
+  createdBy String?  @map("created_by") @db.Uuid
+  createdAt DateTime @default(now()) @map("created_at")
+
+  creator User? @relation("FamilyCreator", fields: [createdBy], references: [id])
+  children ChildProfile[]
+
+  @@map("families")
+}
+
+model ChildProfile {
+  id                   String   @id @default(uuid()) @db.Uuid
+  familyId             String?  @map("family_id") @db.Uuid
+  childUserId          String?  @map("child_user_id") @db.Uuid
+  nickname             String
+  ageBand              String   @map("age_band")
+  readingLevel         String?  @map("reading_level")
+  interests            Json     @default("[]")
+  learningGoals        Json     @default("[]") @map("learning_goals")
+  autonomyLevel        Int      @default(1) @map("autonomy_level")
+  transcriptVisibility String   @default("balanced") @map("transcript_visibility")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  family Family? @relation(fields: [familyId], references: [id])
+  hermesAgents HermesChildAgent[]
+  policyCaches ParentPolicyCache[]
+  skillInstalls SkillInstall[]
+
+  @@map("child_profiles")
+}
+
+model HermesChildAgent {
+  id                       String   @id @default(uuid()) @db.Uuid
+  childProfileId           String?  @map("child_profile_id") @db.Uuid
+  hermesAgentId            String   @unique @map("hermes_agent_id")
+  hermesAgentType          String   @default("kid_safe_child_agent") @map("hermes_agent_type")
+  status                   String   @default("active")
+  activePromptStackVersion String?  @map("active_prompt_stack_version")
+  activePolicyPackVersion  String?  @map("active_policy_pack_version")
+  activeModelRoute         String?  @map("active_model_route")
+  memoryMode               String   @default("single_child_scoped") @map("memory_mode")
+  lastSyncedAt             DateTime? @map("last_synced_at")
+  createdAt                DateTime @default(now()) @map("created_at")
+  updatedAt                DateTime @updatedAt @map("updated_at")
+
+  childProfile ChildProfile? @relation(fields: [childProfileId], references: [id])
+
+  @@map("hermes_child_agents")
+}
+
+model ParentPolicyCache {
+  id                         String   @id @default(uuid()) @db.Uuid
+  childProfileId             String?  @map("child_profile_id") @db.Uuid
+  hermesAgentId              String   @map("hermes_agent_id")
+  allowedTopics              Json     @default("[]") @map("allowed_topics")
+  blockedTopics              Json     @default("[]") @map("blocked_topics")
+  parentApprovalTopics       Json     @default("[]") @map("parent_approval_topics")
+  dailyTimeLimitMinutes      Int      @default(30) @map("daily_time_limit_minutes")
+  sessionLimitMinutes        Int      @default(15) @map("session_limit_minutes")
+  bedtimeStart               String?  @map("bedtime_start")
+  bedtimeEnd                 String?  @map("bedtime_end")
+  checkpointBonusEnabled     Boolean  @default(false) @map("checkpoint_bonus_enabled")
+  maxBonusMinutesPerDay      Int      @default(12) @map("max_bonus_minutes_per_day")
+  familyValues               String?  @map("family_values")
+  alertSettings              Json     @default("{}") @map("alert_settings")
+  dataRetentionDays          Int      @default(90) @map("data_retention_days")
+  active                     Boolean  @default(true)
+  lastPushedToHermesAt       DateTime? @map("last_pushed_to_hermes_at")
+  createdAt                  DateTime @default(now()) @map("created_at")
+  updatedAt                  DateTime @updatedAt @map("updated_at")
+
+  childProfile ChildProfile? @relation(fields: [childProfileId], references: [id])
+
+  @@map("parent_policy_cache")
+}
+
+model Skill {
+  id                   String   @id
+  creatorId            String?  @map("creator_id") @db.Uuid
+  name                 String
+  description          String?
+  category             String?
+  ageMin               Int?     @map("age_min")
+  ageMax               Int?     @map("age_max")
+  manifest             Json
+  hermesSkillPackageId String?  @map("hermes_skill_package_id")
+  status               String   @default("draft")
+  riskLevel            String   @default("low") @map("risk_level")
+  createdAt            DateTime @default(now()) @map("created_at")
+  updatedAt            DateTime @updatedAt @map("updated_at")
+
+  installs SkillInstall[]
+
+  @@map("skills")
+}
+
+model SkillInstall {
+  id                   String   @id @default(uuid()) @db.Uuid
+  skillId              String?  @map("skill_id")
+  childProfileId       String?  @map("child_profile_id") @db.Uuid
+  hermesAgentId        String   @map("hermes_agent_id")
+  approvedBy           String?  @map("approved_by") @db.Uuid
+  hermesInstallationId String?  @map("hermes_installation_id")
+  settings             Json     @default("{}")
+  installedAt          DateTime @default(now()) @map("installed_at")
+  disabledAt           DateTime? @map("disabled_at")
+
+  skill Skill? @relation(fields: [skillId], references: [id])
+  childProfile ChildProfile? @relation(fields: [childProfileId], references: [id])
+
+  @@map("skill_installs")
+}
+
+model ProductAuditEvent {
+  id             String   @id @default(uuid()) @db.Uuid
+  actorUserId    String?  @map("actor_user_id") @db.Uuid
+  familyId       String?  @map("family_id") @db.Uuid
+  childProfileId String?  @map("child_profile_id") @db.Uuid
+  hermesAgentId  String?  @map("hermes_agent_id")
+  eventType      String   @map("event_type")
+  metadata       Json     @default("{}")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  @@map("product_audit_events")
+}
