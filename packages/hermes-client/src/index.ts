@@ -8,6 +8,7 @@ import {
   seedSkills,
   nowIso
 } from "@kidsafe/shared";
+import { existsSync, readFileSync } from "node:fs";
 import type {
   AgeBand,
   ChatMessage,
@@ -68,10 +69,14 @@ type HermesDemoState = {
 };
 
 type HermesRuntimeConfig = {
+  childProfileId?: string;
   profileName: string;
   baseUrl: string;
   apiKey: string;
   modelName?: string;
+  isolationMode?: HermesAgentMapping["isolationMode"];
+  gatewayMode?: HermesAgentMapping["gatewayMode"];
+  containerName?: string;
 };
 
 declare global {
@@ -598,9 +603,7 @@ const createDemoHermesClient = () => {
 
 const normalizeBaseUrl = (baseUrl: string) => baseUrl.replace(/\/+$/, "").replace(/\/v1$/, "");
 
-const parseRuntimeRegistry = () => {
-  const registry: Record<string, HermesRuntimeConfig> = {};
-  const raw = process.env.HERMES_PROFILE_REGISTRY;
+const mergeRuntimeRegistry = (registry: Record<string, HermesRuntimeConfig>, raw: string | undefined) => {
   if (raw) {
     const parsed = JSON.parse(raw) as
       | Record<string, HermesRuntimeConfig>
@@ -608,36 +611,86 @@ const parseRuntimeRegistry = () => {
     if (Array.isArray(parsed)) {
       for (const entry of parsed) {
         registry[entry.hermesAgentId] = {
+          childProfileId: entry.childProfileId,
           profileName: entry.profileName,
           baseUrl: normalizeBaseUrl(entry.baseUrl),
           apiKey: entry.apiKey,
-          modelName: entry.modelName
+          modelName: entry.modelName,
+          isolationMode: entry.isolationMode,
+          gatewayMode: entry.gatewayMode,
+          containerName: entry.containerName
         };
       }
     } else {
       for (const [hermesAgentId, entry] of Object.entries(parsed)) {
         registry[hermesAgentId] = {
+          childProfileId: entry.childProfileId,
           profileName: entry.profileName,
           baseUrl: normalizeBaseUrl(entry.baseUrl),
           apiKey: entry.apiKey,
-          modelName: entry.modelName
+          modelName: entry.modelName,
+          isolationMode: entry.isolationMode,
+          gatewayMode: entry.gatewayMode,
+          containerName: entry.containerName
         };
       }
     }
   }
+};
+
+const parseRuntimeRegistry = () => {
+  const registry: Record<string, HermesRuntimeConfig> = {};
+
+  const registryFile = process.env.HERMES_PROFILE_REGISTRY_FILE;
+  if (registryFile && existsSync(registryFile)) {
+    mergeRuntimeRegistry(registry, readFileSync(registryFile, "utf8"));
+  }
+
+  mergeRuntimeRegistry(registry, process.env.HERMES_PROFILE_REGISTRY);
 
   if (process.env.HERMES_API_BASE_URL && process.env.HERMES_API_KEY) {
     const profileName = process.env.HERMES_PROFILE_NAME ?? "default";
     const hermesAgentId = process.env.HERMES_AGENT_ID ?? `hermes_profile_${profileName}`;
     registry[hermesAgentId] = {
+      childProfileId: process.env.HERMES_CHILD_PROFILE_ID,
       profileName,
       baseUrl: normalizeBaseUrl(process.env.HERMES_API_BASE_URL),
       apiKey: process.env.HERMES_API_KEY,
-      modelName: process.env.HERMES_MODEL_NAME ?? profileName
+      modelName: process.env.HERMES_MODEL_NAME ?? profileName,
+      isolationMode: "hermes_profile_process",
+      gatewayMode: "dedicated_api_server"
     };
   }
 
   return registry;
+};
+
+const childProfileIdFromHermesAgentId = (hermesAgentId: string) => hermesAgentId.replace(/^hermes_profile_/, "");
+
+const registryAgentMapping = (
+  hermesAgentId: string,
+  runtime: HermesRuntimeConfig,
+  base?: HermesAgentMapping
+): HermesAgentMapping => {
+  const childProfileId = runtime.childProfileId ?? base?.childProfileId ?? childProfileIdFromHermesAgentId(hermesAgentId);
+  return {
+    id: base?.id ?? `mapping_${childProfileId}`,
+    childProfileId,
+    hermesAgentId,
+    hermesProfileName: runtime.profileName,
+    isolationMode: runtime.isolationMode ?? "hermes_profile_process",
+    gatewayMode: runtime.gatewayMode ?? "dedicated_api_server",
+    hermesAgentType: "kid_safe_child_agent",
+    status: base?.status ?? "active",
+    activePromptStackVersion: base?.activePromptStackVersion ?? "child_safety_stack_v1.4",
+    activePolicyPackVersion: base?.activePolicyPackVersion ?? "balanced_policy_v1.2",
+    activeModelRoute: runtime.modelName ?? base?.activeModelRoute ?? runtime.profileName,
+    memoryMode: "single_child_scoped",
+    installedSkillIds: base?.installedSkillIds ?? [],
+    runtimeHealth: base?.runtimeHealth === "offline" ? "degraded" : base?.runtimeHealth ?? "healthy",
+    lastSyncedAt: nowIso(),
+    createdAt: base?.createdAt ?? nowIso()
+  };
 };
 
 const runtimeFor = (hermesAgentId: string) => {
@@ -739,7 +792,9 @@ const createRealHermesClient = () => {
         if (!response.ok) {
           throw new Error(`Hermes provisioner failed with ${response.status}: ${(await response.text()).slice(0, 500)}`);
         }
-        return response.json() as Promise<{ mapping: HermesAgentMapping; policy: ParentPolicyCache }>;
+        const result = (await response.json()) as { mapping: HermesAgentMapping; policy: ParentPolicyCache };
+        realAgentOverrides[result.mapping.hermesAgentId] = result.mapping;
+        return result;
       }
 
       const result = await mirror.provisionChildAgent(input);
@@ -757,14 +812,24 @@ const createRealHermesClient = () => {
 
     async getAgent(hermesAgentId: string) {
       if (realAgentOverrides[hermesAgentId]) return clone(realAgentOverrides[hermesAgentId]);
+      const runtime = parseRuntimeRegistry()[hermesAgentId];
+      if (runtime) {
+        const base = await mirror.getAgent(hermesAgentId).catch(() => undefined);
+        return registryAgentMapping(hermesAgentId, runtime, base);
+      }
       return mirror.getAgent(hermesAgentId);
     },
 
     async listAgents() {
+      const registry = parseRuntimeRegistry();
       const mirrored = await mirror.listAgents();
+      const registryAgents = Object.entries(registry).map(([hermesAgentId, runtime]) => {
+        const base = mirrored.find((agent) => agent.hermesAgentId === hermesAgentId);
+        return registryAgentMapping(hermesAgentId, runtime, base);
+      });
       const overrides = Object.values(realAgentOverrides);
-      const overrideIds = new Set(overrides.map((agent) => agent.hermesAgentId));
-      return [...overrides, ...mirrored.filter((agent) => !overrideIds.has(agent.hermesAgentId))];
+      const seenIds = new Set([...overrides, ...registryAgents].map((agent) => agent.hermesAgentId));
+      return [...overrides, ...registryAgents.filter((agent) => !realAgentOverrides[agent.hermesAgentId]), ...mirrored.filter((agent) => !seenIds.has(agent.hermesAgentId))];
     },
 
     async updatePolicy(hermesAgentId: string, patch: Partial<ParentPolicyCache>) {

@@ -12,13 +12,13 @@ Parent and child UI
 
 The local prototype includes a demo Hermes implementation in `packages/hermes-client/src/index.ts` so the app runs without external services. This is not an app-layer agent framework. It is the development stand-in for Hermes.
 
-The real integration path uses one Hermes profile/API server per child profile. See `docs/hermes-real-integration.md`.
+The real integration path uses one Hermes runtime per child profile. The local MVP path provisions one Docker container per child through the Runtime Manager, and the app reads the generated profile registry file. See `docs/hermes-runtime-manager.md` and `docs/hermes-real-integration.md`.
 
 ## Runtime Ownership
 
 Hermes owns:
 
-- One dedicated child profile runtime, represented by one Hermes profile/process per child in the MVP deployment
+- One dedicated child profile runtime, represented by one Hermes Docker container per child in the local MVP deployment
 - Prompt stack assembly
 - Parent policy overlays
 - Skill permissions and runtime
@@ -89,3 +89,20 @@ Creator:
 - Requests for private info, dangerous instructions, or bonus time are decided by the Hermes client.
 - Checkpoints can grant parent-capped bonus time.
 - Admin eval runs are created through Hermes.
+
+## Runtime Manager
+
+The local Runtime Manager owns Docker operations. The app should not mount or receive the Docker socket.
+
+```txt
+Thin API gateway
+  -> @kidsafe/hermes-client
+  -> HERMES_PROVISIONER_URL
+  -> Runtime Manager
+  -> Docker daemon
+  -> Hermes child container
+```
+
+The generated `HERMES_PROFILE_REGISTRY_FILE` is the bridge back to the app. It maps `hermes_profile_child_ava` to the child runtime's loopback API URL and server-side API key.
+
+Production can replace the Docker manager with ECS/Fargate tasks, Kubernetes Pods, or Nomad jobs behind the same provision/start/stop/status/destroy interface.

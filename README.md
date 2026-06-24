@@ -12,6 +12,7 @@ KidSafe Hermes Runtime is a prototype child-safe AI assistant platform built aro
 - Shared product and Hermes types
 - Local Hermes demo backend through `@kidsafe/hermes-client`
 - Real Hermes profile API mode via `HERMES_RUNTIME_MODE=real`
+- Local Docker Runtime Manager for one Hermes container per child profile
 - Seed family, child profile, Hermes agent mapping, policies, skills, policy events, prompts, and evals
 - Prisma schema matching the spec's product metadata tables
 
@@ -63,20 +64,36 @@ Provider secrets such as `OPENAI_API_KEY` do not belong in this app. Model provi
 
 ## Use Real Hermes
 
-Real Hermes uses profiles as the isolation primitive. For this product, one child should map to one Hermes profile and one dedicated API server process.
+Real Hermes uses profiles as the isolation primitive. For this product, the MVP runtime model is one child mapped to one dedicated Hermes Docker runtime with its own data directory, API key, and loopback API port.
 
-Read [docs/hermes-real-integration.md](docs/hermes-real-integration.md), then set:
+Recommended local path:
+
+```bash
+npm run hermes:runtime -- plan --child-id child_ava --nickname Ava --age-band 9-12 --port 8643
+```
+
+If Docker and Hermes image access are available, provision the container:
+
+```bash
+npm run hermes:runtime -- provision --child-id child_ava --nickname Ava --age-band 9-12 --port 8643
+```
+
+Then set:
 
 ```bash
 HERMES_RUNTIME_MODE=real
-HERMES_PROFILE_REGISTRY='{"hermes_profile_child_ava":{"profileName":"child_ava","baseUrl":"http://127.0.0.1:8643","apiKey":"...","modelName":"child_ava"}}'
+HERMES_PROFILE_REGISTRY_FILE=.local/hermes-runtimes/registry.json
 ```
 
-Provision a child profile:
+For automatic child creation in real mode, run the internal provisioner:
 
 ```bash
-npm run hermes:provision-child -- --child-id child_ava --nickname Ava --age-band 9-12 --profile child_ava --port 8643 --execute
+HERMES_RUNTIME_MANAGER_KEY=dev-local-secret npm run hermes:runtime-server
 ```
+
+and set `HERMES_PROVISIONER_URL=http://127.0.0.1:8787/provision-child` plus the same `HERMES_PROVISIONER_KEY`.
+
+Read [docs/hermes-runtime-manager.md](docs/hermes-runtime-manager.md) for the Docker runtime path and [docs/hermes-real-integration.md](docs/hermes-real-integration.md) for the underlying Hermes API/profile integration.
 
 The existing Hermes client methods remain the app boundary:
 

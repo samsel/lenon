@@ -13,8 +13,8 @@ Real Hermes does not expose the product-style `agents.create` control plane imag
 Child account
   -> product child_profile_id
   -> hermes_profile_child_<id>
-  -> dedicated Hermes profile directory
-  -> dedicated Hermes gateway/API server process
+  -> dedicated Hermes runtime directory
+  -> dedicated Hermes gateway/API server
   -> model provider configured inside that profile
 ```
 
@@ -28,10 +28,17 @@ Set real mode:
 HERMES_RUNTIME_MODE=real
 ```
 
+For the local Docker Runtime Manager path:
+
+```bash
+HERMES_PROFILE_REGISTRY_FILE=.local/hermes-runtimes/registry.json
+```
+
 For one profile:
 
 ```bash
 HERMES_AGENT_ID=hermes_profile_child_ava
+HERMES_CHILD_PROFILE_ID=child_ava
 HERMES_PROFILE_NAME=child_ava
 HERMES_API_BASE_URL=http://127.0.0.1:8643
 HERMES_API_KEY=replace-with-profile-api-key
@@ -57,7 +64,46 @@ HERMES_PROFILE_REGISTRY='{
 }'
 ```
 
-## Provision A Child Profile
+## Provision A Child Docker Runtime
+
+The recommended local MVP path is the Docker Runtime Manager:
+
+```bash
+npm run hermes:runtime -- plan \
+  --child-id child_ava \
+  --nickname Ava \
+  --age-band 9-12 \
+  --port 8643
+```
+
+When Docker is available:
+
+```bash
+npm run hermes:runtime -- provision \
+  --child-id child_ava \
+  --nickname Ava \
+  --age-band 9-12 \
+  --port 8643
+```
+
+This writes `.local/hermes-runtimes/registry.json`, creates the child data directory, generates a per-child API key, and starts a Hermes container bound to loopback only.
+
+For automatic onboarding in real mode:
+
+```bash
+HERMES_RUNTIME_MANAGER_KEY=dev-local-secret npm run hermes:runtime-server
+```
+
+Set:
+
+```bash
+HERMES_PROVISIONER_URL=http://127.0.0.1:8787/provision-child
+HERMES_PROVISIONER_KEY=dev-local-secret
+```
+
+See `docs/hermes-runtime-manager.md`.
+
+## Manual Profile Provisioning
 
 First create/configure a Hermes template profile manually. Recommended:
 
@@ -109,6 +155,8 @@ Implemented:
 - real `/v1/responses` calls for child chat
 - stable `X-Hermes-Session-Id`
 - stable `X-Hermes-Session-Key`
+- file-based runtime registry via `HERMES_PROFILE_REGISTRY_FILE`
+- local Docker Runtime Manager provisioner/CLI/server
 - `/v1/skills` discovery when available
 - no API token exposure to the browser
 
@@ -116,7 +164,6 @@ Still needed for production-grade child safety:
 
 - KidSafe Hermes plugin/hooks for input gates, output gates, event logging, and parent policy enforcement
 - real database persistence for child/profile mappings
-- process supervisor for one gateway/API process per child profile
 - integration tests against a real local Hermes gateway
 - admin isolation audit that verifies profile directory, API port, token, toolsets, and session DB separation
 
