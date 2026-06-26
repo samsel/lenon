@@ -8,7 +8,9 @@ import {
   seedSkills,
   nowIso
 } from "@kidsafe/shared";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync } from "node:fs";
+import { dirname, join } from "node:path";
 import type {
   AgeBand,
   ChatMessage,
@@ -40,8 +42,17 @@ type HermesChatInput = {
   childProfileId: string;
   hermesAgentId: string;
   message: string;
+  sessionId?: string;
   skillId?: string;
   clientContext?: Record<string, unknown>;
+  policy?: ParentPolicyCache;
+};
+
+type HermesSessionInput = {
+  childProfileId: string;
+  hermesAgentId: string;
+  reset?: boolean;
+  policy?: ParentPolicyCache;
 };
 
 type HermesChatResponse = {
@@ -65,7 +76,49 @@ type HermesDemoState = {
   prompts: PromptVersion[];
   evalRuns: EvalRun[];
   messages: Record<string, ChatMessage[]>;
+  activeSessions: Record<string, string>;
   checkpointAttempts: Record<string, number>;
+};
+
+type AuditStatus = "pass" | "warn" | "fail" | "unknown";
+
+type RuntimeAuditCheck = {
+  id: string;
+  label: string;
+  status: AuditStatus;
+  detail: string;
+};
+
+type RuntimeAudit = {
+  childProfileId: string;
+  hermesAgentId: string;
+  profileName?: string;
+  modelName?: string;
+  modelProvider?: string;
+  modelBackend?: string;
+  baseUrl: string;
+  containerName?: string;
+  containerRunning: boolean | null;
+  apiReachable: boolean;
+  apiStatus?: number;
+  terminalBackend?: string;
+  dockerSocket: "absent" | "present" | "unknown";
+  apiServerToolsets: Array<{ name: string; enabled: boolean }>;
+  disabledToolsets: string[];
+  secrets: {
+    apiKeyConfigured: boolean;
+    apiKeyExposed: false;
+    registrySource: "file" | "env" | "single_env" | "none";
+  };
+  checks: RuntimeAuditCheck[];
+  auditedAt: string;
+};
+
+type RuntimeProvisionResult = {
+  childProfileId: string;
+  hermesAgentId?: string;
+  status: "provisioned" | "skipped" | "failed";
+  summary: string;
 };
 
 type HermesRuntimeConfig = {
@@ -109,6 +162,9 @@ const initialState = (): HermesDemoState => ({
         createdAt: nowIso()
       }
     ]
+  },
+  activeSessions: {
+    child_ava: "kidsafe-child_ava-seed"
   },
   checkpointAttempts: {}
 });
@@ -242,6 +298,278 @@ const responseFor = (
     return "Let us debug it step by step. What did you expect the code to do, and what did it do instead?";
   }
   return "I can help with that. Let us take it one step at a time, and I will keep the answer safe, clear, and at your level.";
+};
+
+const newSessionId = (childProfileId: string) => `kidsafe-${childProfileId}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
+
+const introMessage = (): ChatMessage => ({
+  id: id("msg"),
+  role: "assistant",
+  content:
+    "New chat started. I can help you learn, make stories, solve puzzles, and explore ideas. I will keep things safe, and sometimes I may suggest asking your parent or another trusted grown-up.",
+  policyAction: "allow",
+  createdAt: nowIso()
+});
+
+const childMessageFor = (input: HermesChatInput): ChatMessage => ({
+  id: id("msg"),
+  role: "child",
+  content: input.message,
+  skillId: input.skillId,
+  createdAt: nowIso()
+});
+
+const policyResponseFor = (
+  state: HermesDemoState,
+  input: HermesChatInput,
+  policy: ParentPolicyCache,
+  action: PolicyAction,
+  category: string,
+  skill?: Skill
+): HermesChatResponse => {
+  const messages = (state.messages[input.childProfileId] ??= [introMessage()]);
+  const checkpoint = action === "offer_checkpoint" ? checkpointForPolicy(policy) : null;
+  const assistantMessage: ChatMessage = {
+    id: id("msg"),
+    role: "assistant",
+    content: responseFor(input.message, action, skill, policy),
+    skillId: input.skillId,
+    policyAction: action,
+    createdAt: nowIso()
+  };
+  messages.push(assistantMessage);
+
+  logPolicyEvent(state, {
+    hermesAgentId: input.hermesAgentId,
+    childProfileId: input.childProfileId,
+    category,
+    severity: action === "crisis_escalation" ? "critical" : action === "block" ? "medium" : "low",
+    action,
+    summary: `App policy gate handled child message with ${action} before Hermes inference.`
+  });
+
+  return {
+    messageId: assistantMessage.id,
+    hermesAgentId: input.hermesAgentId,
+    response: assistantMessage.content,
+    policyAction: action,
+    assistantMessage,
+    skillState: { appPolicyGate: true, skippedHermesInference: true },
+    rewards: [],
+    checkpoint,
+    timeRemainingSeconds: Math.max(90, policy.sessionLimitMinutes * 60 - messages.length * 40)
+  };
+};
+
+const registrySource = () => {
+  if (process.env.HERMES_PROFILE_REGISTRY_FILE) return "file" as const;
+  if (process.env.HERMES_PROFILE_REGISTRY) return "env" as const;
+  if (process.env.HERMES_API_BASE_URL && process.env.HERMES_API_KEY) return "single_env" as const;
+  return "none" as const;
+};
+
+const redactUrl = (value: string | undefined) => {
+  if (!value) return undefined;
+  try {
+    const url = new URL(value);
+    url.username = "";
+    url.password = "";
+    url.search = "";
+    url.hash = "";
+    return url.toString().replace(/\/$/, "");
+  } catch {
+    return value.replace(/\/\/[^/@]+@/, "//[redacted]@").replace(/[?#].*$/, "");
+  }
+};
+
+const dockerEnv = () => {
+  const anonConfig = join(process.cwd(), ".local", "docker-anon");
+  return existsSync(anonConfig) ? { ...process.env, DOCKER_CONFIG: anonConfig } : process.env;
+};
+
+const dockerOutput = (args: string[], timeout = 8000) => {
+  try {
+    return execFileSync("docker", args, {
+      encoding: "utf8",
+      env: dockerEnv(),
+      timeout,
+      stdio: ["ignore", "pipe", "pipe"]
+    }).trim();
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    return `__ERROR__ ${detail.slice(0, 300)}`;
+  }
+};
+
+const parseToolsets = (output: string) =>
+  output
+    .split("\n")
+    .map((line) => {
+      const match = /^\s*([✓✗])\s+(enabled|disabled)\s+([a-z0-9_-]+)/i.exec(line);
+      if (!match) return null;
+      return { name: match[3], enabled: match[2] === "enabled" };
+    })
+    .filter((item): item is { name: string; enabled: boolean } => Boolean(item));
+
+const configPathForRuntime = (runtime: HermesRuntimeConfig) => {
+  const registryFile = process.env.HERMES_PROFILE_REGISTRY_FILE;
+  if (!registryFile || !runtime.childProfileId) return undefined;
+  return join(dirname(registryFile), "children", runtime.childProfileId, "data", "config.yaml");
+};
+
+const readRuntimeConfigText = (runtime: HermesRuntimeConfig) => {
+  const path = configPathForRuntime(runtime);
+  if (!path || !existsSync(path)) return "";
+  return readFileSync(path, "utf8");
+};
+
+const readYamlScalar = (text: string, section: string, key: string) => {
+  const lines = text.split(/\r?\n/);
+  let inSection = false;
+  for (const line of lines) {
+    if (!line.startsWith(" ") && line.trim().endsWith(":")) {
+      inSection = line.trim() === `${section}:`;
+      continue;
+    }
+    if (inSection) {
+      const match = new RegExp(`^\\s+${key}:\\s*(.*)$`).exec(line);
+      if (match) return match[1].trim().replace(/^['"]|['"]$/g, "");
+      if (!line.startsWith(" ")) break;
+    }
+  }
+  return undefined;
+};
+
+const readYamlList = (text: string, section: string, key: string) => {
+  const lines = text.split(/\r?\n/);
+  const result: string[] = [];
+  let inSection = false;
+  let inList = false;
+  for (const line of lines) {
+    if (!line.startsWith(" ") && line.trim().endsWith(":")) {
+      inSection = line.trim() === `${section}:`;
+      inList = false;
+      continue;
+    }
+    if (!inSection) continue;
+    if (new RegExp(`^\\s+${key}:\\s*$`).test(line)) {
+      inList = true;
+      continue;
+    }
+    if (inList) {
+      const match = /^\s+-\s+(.+)$/.exec(line);
+      if (match) result.push(match[1].trim());
+      else if (line.trim() && !line.startsWith("    ")) break;
+    }
+  }
+  return result;
+};
+
+const buildRuntimeAudit = async (hermesAgentId: string, runtime: HermesRuntimeConfig): Promise<RuntimeAudit> => {
+  const configText = readRuntimeConfigText(runtime);
+  const modelProvider = readYamlScalar(configText, "model", "provider");
+  const modelName = readYamlScalar(configText, "model", "default") ?? runtime.modelName;
+  const modelBackend = redactUrl(readYamlScalar(configText, "model", "base_url"));
+  const disabledToolsets = readYamlList(configText, "agent", "disabled_toolsets");
+  const checks: RuntimeAuditCheck[] = [];
+
+  let apiReachable = false;
+  let apiStatus: number | undefined;
+  try {
+    const response = await fetch(`${runtime.baseUrl}/v1/models`, {
+      headers: { authorization: `Bearer ${runtime.apiKey}` },
+      signal: AbortSignal.timeout(6000)
+    });
+    apiReachable = response.ok;
+    apiStatus = response.status;
+  } catch {
+    apiReachable = false;
+  }
+
+  let containerRunning: boolean | null = null;
+  let dockerSocket: RuntimeAudit["dockerSocket"] = "unknown";
+  let terminalBackend = readYamlScalar(configText, "terminal", "backend");
+  let apiServerToolsets: RuntimeAudit["apiServerToolsets"] = [];
+
+  if (runtime.containerName) {
+    const inspect = dockerOutput(["inspect", runtime.containerName]);
+    if (!inspect.startsWith("__ERROR__")) {
+      const parsed = JSON.parse(inspect) as Array<{ State?: { Running?: boolean } }>;
+      containerRunning = Boolean(parsed[0]?.State?.Running);
+    }
+
+    const socket = dockerOutput(["exec", runtime.containerName, "sh", "-lc", "test -S /var/run/docker.sock && echo present || echo absent"]);
+    dockerSocket = socket === "present" ? "present" : socket === "absent" ? "absent" : "unknown";
+
+    const terminal = dockerOutput(["exec", runtime.containerName, "sh", "-lc", "grep '^TERMINAL_ENV=' /opt/data/.env | cut -d= -f2- || true"]);
+    if (terminal && !terminal.startsWith("__ERROR__")) terminalBackend = terminal;
+
+    const tools = dockerOutput(["exec", runtime.containerName, "hermes", "tools", "list", "--platform", "api_server"], 15000);
+    if (!tools.startsWith("__ERROR__")) apiServerToolsets = parseToolsets(tools);
+  }
+
+  checks.push({
+    id: "api_reachable",
+    label: "Hermes API reachable",
+    status: apiReachable ? "pass" : "fail",
+    detail: apiReachable ? `GET /v1/models returned ${apiStatus}` : `GET /v1/models failed${apiStatus ? ` with ${apiStatus}` : ""}`
+  });
+  checks.push({
+    id: "container_running",
+    label: "Container running",
+    status: containerRunning === true ? "pass" : containerRunning === false ? "fail" : "unknown",
+    detail: runtime.containerName ? `${runtime.containerName}: ${containerRunning === null ? "not inspectable" : containerRunning ? "running" : "stopped"}` : "No container name in registry"
+  });
+  checks.push({
+    id: "docker_socket",
+    label: "Docker socket absent",
+    status: dockerSocket === "absent" ? "pass" : dockerSocket === "present" ? "fail" : "unknown",
+    detail: dockerSocket === "absent" ? "No /var/run/docker.sock inside child runtime" : dockerSocket
+  });
+  checks.push({
+    id: "terminal_backend",
+    label: "Terminal backend fail-closed",
+    status: terminalBackend === "docker" ? "pass" : terminalBackend ? "warn" : "unknown",
+    detail: terminalBackend ?? "Not found"
+  });
+  const enabledToolsets = apiServerToolsets.filter((toolset) => toolset.enabled).map((toolset) => toolset.name);
+  checks.push({
+    id: "api_server_tools",
+    label: "API server tools disabled",
+    status: enabledToolsets.length === 0 && apiServerToolsets.length > 0 ? "pass" : enabledToolsets.length ? "fail" : "unknown",
+    detail: enabledToolsets.length ? `Enabled: ${enabledToolsets.join(", ")}` : "No enabled built-in toolsets"
+  });
+  checks.push({
+    id: "secrets_redacted",
+    label: "Secrets stay server-side",
+    status: runtime.apiKey ? "pass" : "fail",
+    detail: "Audit reports booleans only; API keys and raw registry values are never returned."
+  });
+
+  return {
+    childProfileId: runtime.childProfileId ?? childProfileIdFromHermesAgentId(hermesAgentId),
+    hermesAgentId,
+    profileName: runtime.profileName,
+    modelName,
+    modelProvider,
+    modelBackend,
+    baseUrl: redactUrl(runtime.baseUrl) ?? "",
+    containerName: runtime.containerName,
+    containerRunning,
+    apiReachable,
+    apiStatus,
+    terminalBackend,
+    dockerSocket,
+    apiServerToolsets,
+    disabledToolsets,
+    secrets: {
+      apiKeyConfigured: Boolean(runtime.apiKey),
+      apiKeyExposed: false,
+      registrySource: registrySource()
+    },
+    checks,
+    auditedAt: nowIso()
+  };
 };
 
 const createDemoHermesClient = () => {
@@ -422,9 +750,13 @@ const createDemoHermesClient = () => {
       return clone({ agent, install });
     },
 
-    async startChildSession(input: { childProfileId: string; hermesAgentId: string }) {
+    async startChildSession(input: HermesSessionInput) {
       const agent = findAgent(state, input.hermesAgentId);
       const policy = findPolicy(state, input.hermesAgentId);
+      if (input.reset || !state.activeSessions[input.childProfileId]) {
+        state.activeSessions[input.childProfileId] = newSessionId(input.childProfileId);
+        state.messages[input.childProfileId] = [introMessage()];
+      }
       logPolicyEvent(state, {
         hermesAgentId: input.hermesAgentId,
         childProfileId: input.childProfileId,
@@ -434,7 +766,7 @@ const createDemoHermesClient = () => {
         summary: agent.status === "active" ? "Hermes started child session." : "Hermes blocked session because agent is paused."
       });
       return {
-        sessionId: id("hermes_session"),
+        sessionId: state.activeSessions[input.childProfileId],
         status: agent.status,
         timeRemainingSeconds: policy.sessionLimitMinutes * 60,
         intro:
@@ -444,15 +776,10 @@ const createDemoHermesClient = () => {
 
     async sendChildMessage(input: HermesChatInput): Promise<HermesChatResponse> {
       const agent = findAgent(state, input.hermesAgentId);
-      const policy = findPolicy(state, input.hermesAgentId);
-      const messages = (state.messages[input.childProfileId] ??= []);
-      const childMessage: ChatMessage = {
-        id: id("msg"),
-        role: "child",
-        content: input.message,
-        skillId: input.skillId,
-        createdAt: nowIso()
-      };
+      const policy = input.policy ?? findPolicy(state, input.hermesAgentId);
+      state.activeSessions[input.childProfileId] ??= input.sessionId ?? newSessionId(input.childProfileId);
+      const messages = (state.messages[input.childProfileId] ??= [introMessage()]);
+      const childMessage = childMessageFor(input);
       messages.push(childMessage);
 
       if (agent.status !== "active") {
@@ -482,20 +809,19 @@ const createDemoHermesClient = () => {
       const detected = skillNotInstalled
         ? { action: "ask_parent_permission" as PolicyAction, category: "skill_permission_sandbox" }
         : detectPolicyAction(input.message, policy);
-      const checkpoint = detected.action === "offer_checkpoint" ? checkpointForPolicy(policy) : null;
+      if (detected.action !== "allow") {
+        return policyResponseFor(state, input, policy, detected.action, detected.category, skill);
+      }
       const response = responseFor(input.message, detected.action, skill, policy);
-      const rewards: RewardEvent[] =
-        detected.action === "allow"
-          ? [
-              {
-                id: id("reward"),
-                label: skill ? `${skill.name} progress` : "Curious question",
-                type: "xp",
-                amount: 5,
-                createdAt: nowIso()
-              }
-            ]
-          : [];
+      const rewards: RewardEvent[] = [
+        {
+          id: id("reward"),
+          label: skill ? `${skill.name} progress` : "Curious question",
+          type: "xp",
+          amount: 5,
+          createdAt: nowIso()
+        }
+      ];
       const assistantMessage: ChatMessage = {
         id: id("msg"),
         role: "assistant",
@@ -506,17 +832,6 @@ const createDemoHermesClient = () => {
       };
       messages.push(assistantMessage);
 
-      if (detected.action !== "allow") {
-        logPolicyEvent(state, {
-          hermesAgentId: input.hermesAgentId,
-          childProfileId: input.childProfileId,
-          category: detected.category,
-          severity: detected.action === "crisis_escalation" ? "critical" : detected.action === "block" ? "medium" : "low",
-          action: detected.action,
-          summary: `Hermes handled child message with ${detected.action}.`
-        });
-      }
-
       return {
         messageId: assistantMessage.id,
         hermesAgentId: input.hermesAgentId,
@@ -525,7 +840,7 @@ const createDemoHermesClient = () => {
         assistantMessage,
         skillState: skill ? { skillId: skill.id, runsInsideChildAgent: true } : {},
         rewards,
-        checkpoint,
+        checkpoint: null,
         timeRemainingSeconds: Math.max(90, policy.sessionLimitMinutes * 60 - messages.length * 40)
       };
     },
@@ -597,6 +912,45 @@ const createDemoHermesClient = () => {
       };
       state.evalRuns.unshift(run);
       return clone(run);
+    },
+
+    async auditRuntimes(): Promise<RuntimeAudit[]> {
+      return state.agents.map((agent) => ({
+        childProfileId: agent.childProfileId,
+        hermesAgentId: agent.hermesAgentId,
+        profileName: agent.hermesProfileName,
+        modelName: agent.activeModelRoute,
+        baseUrl: "demo://local-memory",
+        containerRunning: null,
+        apiReachable: true,
+        terminalBackend: "demo",
+        dockerSocket: "unknown",
+        apiServerToolsets: [],
+        disabledToolsets: [],
+        secrets: {
+          apiKeyConfigured: false,
+          apiKeyExposed: false,
+          registrySource: "none"
+        },
+        checks: [
+          {
+            id: "demo_runtime",
+            label: "Demo runtime",
+            status: "warn",
+            detail: "Demo mode has no Docker/Hermes runtime to audit."
+          }
+        ],
+        auditedAt: nowIso()
+      }));
+    },
+
+    async provisionConfiguredChildren(): Promise<RuntimeProvisionResult[]> {
+      return state.agents.map((agent) => ({
+        childProfileId: agent.childProfileId,
+        hermesAgentId: agent.hermesAgentId,
+        status: "skipped",
+        summary: "Demo mode keeps agents in memory; no external runtime provisioned."
+      }));
     }
   };
 };
@@ -925,28 +1279,54 @@ const createRealHermesClient = () => {
       return mirror.uninstallSkill(input);
     },
 
-    async startChildSession(input: { childProfileId: string; hermesAgentId: string }) {
+    async startChildSession(input: HermesSessionInput) {
       const runtime = runtimeFor(input.hermesAgentId);
+      const state = getState();
+      const policy = input.policy ?? state.policies.find((item) => item.hermesAgentId === input.hermesAgentId);
+      if (input.reset || !state.activeSessions[input.childProfileId]) {
+        state.activeSessions[input.childProfileId] = newSessionId(input.childProfileId);
+        state.messages[input.childProfileId] = [introMessage()];
+      }
       return {
-        sessionId: `kidsafe-${input.childProfileId}`,
+        sessionId: state.activeSessions[input.childProfileId],
         status: "active" as const,
-        timeRemainingSeconds: 900,
+        timeRemainingSeconds: (policy?.sessionLimitMinutes ?? 15) * 60,
         intro: `Connected to Hermes profile ${runtime.profileName}.`
       };
     },
 
     async sendChildMessage(input: HermesChatInput): Promise<HermesChatResponse> {
       const runtime = runtimeFor(input.hermesAgentId);
+      const state = getState();
+      const policy = input.policy ?? state.policies.find((item) => item.hermesAgentId === input.hermesAgentId);
+      if (!policy) throw new Error(`Hermes policy not found for ${input.hermesAgentId}`);
+      const messages = (state.messages[input.childProfileId] ??= [introMessage()]);
+      const sessionId = input.sessionId ?? state.activeSessions[input.childProfileId] ?? newSessionId(input.childProfileId);
+      state.activeSessions[input.childProfileId] = sessionId;
+      messages.push(childMessageFor(input));
+
+      const baseAgent = await mirror.getAgent(input.hermesAgentId).catch(() => undefined);
+      const agent =
+        realAgentOverrides[input.hermesAgentId] ?? registryAgentMapping(input.hermesAgentId, runtime, baseAgent);
+      const skill = input.skillId ? state.skills.find((item) => item.id === input.skillId) : undefined;
+      const skillNotInstalled = input.skillId && !agent.installedSkillIds.includes(input.skillId);
+      const detected = skillNotInstalled
+        ? { action: "ask_parent_permission" as PolicyAction, category: "skill_permission_sandbox" }
+        : detectPolicyAction(input.message, policy);
+      if (detected.action !== "allow") {
+        return policyResponseFor(state, input, policy, detected.action, detected.category, skill);
+      }
+
       const response = await hermesJson<{ id: string }>(runtime, "/v1/responses", {
         method: "POST",
         headers: {
-          "X-Hermes-Session-Id": `kidsafe-${input.childProfileId}`,
-          "X-Hermes-Session-Key": `agent:main:kidsafe:dm:${input.childProfileId}`
+          "X-Hermes-Session-Id": sessionId,
+          "X-Hermes-Session-Key": `agent:main:kidsafe:dm:${input.childProfileId}:${sessionId}`
         },
         body: JSON.stringify({
           model: runtime.modelName ?? runtime.profileName,
           input: input.message,
-          conversation: `kidsafe-${input.childProfileId}`,
+          conversation: sessionId,
           store: true
         })
       });
@@ -959,6 +1339,7 @@ const createRealHermesClient = () => {
         policyAction: "allow",
         createdAt: nowIso()
       };
+      messages.push(assistantMessage);
 
       return {
         messageId: assistantMessage.id,
@@ -986,7 +1367,8 @@ const createRealHermesClient = () => {
     },
 
     async getMessages(childProfileId: string) {
-      return mirror.getMessages(childProfileId);
+      const state = getState();
+      return clone(state.messages[childProfileId] ?? []);
     },
 
     async listPolicyEvents() {
@@ -1003,6 +1385,61 @@ const createRealHermesClient = () => {
 
     async runEval(input: { suiteId: string; target: EvalRun["target"]; hermesAgentId?: string }) {
       return mirror.runEval(input);
+    },
+
+    async auditRuntimes(): Promise<RuntimeAudit[]> {
+      const registry = parseRuntimeRegistry();
+      return Promise.all(Object.entries(registry).map(([hermesAgentId, runtime]) => buildRuntimeAudit(hermesAgentId, runtime)));
+    },
+
+    async provisionConfiguredChildren(children?: CreateChildAgentInput[]): Promise<RuntimeProvisionResult[]> {
+      const registry = parseRuntimeRegistry();
+      if (!children?.length) {
+        return Object.entries(registry).map(([hermesAgentId, runtime]) => ({
+          childProfileId: runtime.childProfileId ?? childProfileIdFromHermesAgentId(hermesAgentId),
+          hermesAgentId,
+          status: "skipped",
+          summary: "Runtime is already present in the configured registry."
+        }));
+      }
+
+      const results: RuntimeProvisionResult[] = [];
+      for (const child of children) {
+        const existing = Object.entries(registry).find(([, runtime]) => runtime.childProfileId === child.childProfileId);
+        if (existing) {
+          results.push({
+            childProfileId: child.childProfileId,
+            hermesAgentId: existing[0],
+            status: "skipped",
+            summary: "Runtime is already present in the configured registry."
+          });
+          continue;
+        }
+        if (!process.env.HERMES_PROVISIONER_URL) {
+          results.push({
+            childProfileId: child.childProfileId,
+            status: "failed",
+            summary: "HERMES_PROVISIONER_URL is not configured; cannot provision runtime automatically."
+          });
+          continue;
+        }
+        try {
+          const provisioned = await this.provisionChildAgent(child);
+          results.push({
+            childProfileId: child.childProfileId,
+            hermesAgentId: provisioned.mapping.hermesAgentId,
+            status: "provisioned",
+            summary: "Provisioner created a child Hermes runtime."
+          });
+        } catch (error) {
+          results.push({
+            childProfileId: child.childProfileId,
+            status: "failed",
+            summary: error instanceof Error ? error.message.slice(0, 240) : "Provisioning failed."
+          });
+        }
+      }
+      return results;
     }
   };
 };

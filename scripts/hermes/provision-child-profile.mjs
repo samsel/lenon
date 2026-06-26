@@ -141,17 +141,51 @@ writeFileSync(join(profileDir, "KIDSAFE_POLICY.json"), `${JSON.stringify(policy,
 writeFileSync(
   join(profileDir, "KIDSAFE_CONFIG_SNIPPET.yaml"),
   `# Merge these settings into ${profileDir}/config.yaml after provider setup.
+platform_toolsets:
+  cli:
+    - no_mcp
+  api_server:
+    - no_mcp
+known_plugin_toolsets:
+  cli: []
+  api_server: []
 terminal:
+  backend: docker
   home_mode: profile
+  docker_mount_cwd_to_workspace: false
+  docker_volumes: []
 agent:
   disabled_toolsets:
-    - terminal
     - web
     - browser
-    - code
-    - delegation
-    - cron
+    - terminal
+    - file
+    - code_execution
+    - vision
+    - video
+    - image_gen
+    - video_gen
+    - x_search
+    - moa
+    - tts
+    - skills
+    - todo
     - memory
+    - context_engine
+    - session_search
+    - clarify
+    - delegation
+    - cronjob
+    - homeassistant
+    - spotify
+    - discord
+    - discord_admin
+    - yuanbao
+    - computer_use
+browser:
+  allow_private_urls: false
+checkpoints:
+  enabled: false
 `
 );
 

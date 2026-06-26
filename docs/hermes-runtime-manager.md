@@ -33,6 +33,8 @@ By default, runtime state lives under:
 
 `.local/` is gitignored because it contains runtime secrets and child-specific state.
 
+Fresh Docker child runtimes also get a conservative `config.yaml` when one does not already exist. The manager does not overwrite an existing Hermes config because provider/model setup may have added local machine details.
+
 ## Plan A Child Runtime
 
 This writes local runtime files and the registry, but does not start Docker:
@@ -71,7 +73,7 @@ The container is created with:
 - one generated `API_SERVER_KEY`
 - CPU, memory, and PID limits
 - `no-new-privileges`
-- dropped Linux capabilities
+- Docker's default capability set, which the Hermes s6 supervisor needs during startup
 - no Docker socket mount
 
 ## Runtime Commands
@@ -87,12 +89,75 @@ npm run hermes:runtime -- destroy --child-id child_ava
 
 Use `--remove-files` with `destroy` only when you intentionally want to delete the child runtime directory.
 
+## Use Local Ollama/Gemma
+
+For local development, a child Hermes container can use Ollama running on the host machine through Ollama's OpenAI-compatible API.
+
+Prerequisites:
+
+```bash
+ollama serve
+ollama pull gemma4:26b
+```
+
+Provision or start the child runtime, then configure Hermes inside that child container:
+
+```bash
+docker exec lenon-hermes-child-ava hermes config set model.default gemma4:26b
+docker exec lenon-hermes-child-ava hermes config set model.provider custom
+docker exec lenon-hermes-child-ava hermes config set model.base_url http://host.docker.internal:11434/v1
+docker restart lenon-hermes-child-ava
+```
+
+Use `custom` because Hermes talks to local Ollama through the standard OpenAI-compatible `/v1` API. Do not use `ollama-cloud` unless the runtime should call Ollama's hosted service instead.
+
+Keep `API_SERVER_MODEL_NAME` and the runtime registry `modelName` as the child-facing profile name, for example `child_ava`. Lenon sends requests to Ava's agent model alias, while Hermes routes the profile to the configured backend model.
+
+## Child Runtime Hardening
+
+The Hermes API server platform defaults to a broad tool surface. Lenon child runtimes should start as plain chat agents and only gain tools after explicit review.
+
+The generated child config sets:
+
+```yaml
+platform_toolsets:
+  cli:
+    - no_mcp
+  api_server:
+    - no_mcp
+terminal:
+  backend: docker
+agent:
+  disabled_toolsets:
+    - web
+    - browser
+    - terminal
+    - file
+    - code_execution
+    - vision
+    - image_gen
+    - skills
+    - memory
+    - delegation
+    - cronjob
+```
+
+The real config also disables the remaining built-in optional toolsets such as video, TTS, X search, smart-home, Discord, Spotify, and computer-use. `terminal.backend: docker` is a fail-closed default for these containers because the runtime does not mount the Docker socket.
+
+Audit the active API-server surface with:
+
+```bash
+docker exec lenon-hermes-child-ava hermes tools list --platform api_server
+```
+
+Every built-in toolset should show `disabled` for the strict child-chat profile. Plain model inference should still work through `/v1/responses`.
+
 ## Provisioner Server
 
 Start the internal provisioner:
 
 ```bash
-HERMES_RUNTIME_MANAGER_KEY=dev-local-secret npm run hermes:runtime-server
+HERMES_RUNTIME_MANAGER_KEY=<local-random-manager-key> npm run hermes:runtime-server
 ```
 
 Then point the app at it:
@@ -101,10 +166,22 @@ Then point the app at it:
 HERMES_RUNTIME_MODE=real
 HERMES_PROFILE_REGISTRY_FILE=.local/hermes-runtimes/registry.json
 HERMES_PROVISIONER_URL=http://127.0.0.1:8787/provision-child
-HERMES_PROVISIONER_KEY=dev-local-secret
+HERMES_PROVISIONER_KEY=<local-random-manager-key>
 ```
 
 When a parent creates a child in Lenon real mode, the app calls the provisioner, the provisioner starts the child Hermes container, and the app stores the returned Hermes mapping.
+
+For local Ollama-backed provisioning, run the provisioner with local-only inference defaults:
+
+```bash
+HERMES_RUNTIME_MANAGER_KEY=<local-random-manager-key> \
+HERMES_RUNTIME_INFERENCE_MODEL=gemma4:26b \
+HERMES_RUNTIME_INFERENCE_PROVIDER=custom \
+HERMES_RUNTIME_INFERENCE_BASE_URL=http://host.docker.internal:11434/v1 \
+npm run hermes:runtime-server
+```
+
+These values are deployment configuration. Keep them in local env or secret managers, not in committed files.
 
 ## Production Notes
 
@@ -119,4 +196,3 @@ For production, replace the Docker implementation behind the same high-level ope
 - `destroyRuntime`
 
 Good production targets are ECS/Fargate tasks, Kubernetes Pods, or Nomad jobs. If Hermes tools eventually execute code, browse, or access files for children, use stronger isolation such as gVisor, Kata Containers, Firecracker-backed tasks, or separate ephemeral tool sandboxes.
-

@@ -51,7 +51,10 @@ const childInput = () => ({
   image: value("image"),
   memory: value("memory"),
   cpus: value("cpus"),
-  modelName: value("model-name")
+  modelName: value("model-name"),
+  inferenceModel: value("inference-model"),
+  inferenceProvider: value("inference-provider"),
+  inferenceBaseUrl: value("inference-base-url")
 });
 
 const runtimeRoot = () => value("runtime-root", defaultRuntimeRoot());
@@ -78,6 +81,9 @@ Options:
   --image <image>           Defaults to nousresearch/hermes-agent:latest
   --memory <limit>          Defaults to 1g
   --cpus <count>            Defaults to 1
+  --inference-model <name>  Optional Hermes backend model, e.g. gemma4:26b
+  --inference-provider <id> Optional Hermes backend provider, e.g. custom
+  --inference-base-url <url> Optional OpenAI-compatible provider base URL
   --recreate                Recreate an existing Docker container on provision
   --remove-files            Also delete local runtime files on destroy
 `);
@@ -118,7 +124,10 @@ try {
       image: value("image"),
       memory: value("memory"),
       cpus: value("cpus"),
-      modelName: value("model-name")
+      modelName: value("model-name"),
+      inferenceModel: value("inference-model"),
+      inferenceProvider: value("inference-provider"),
+      inferenceBaseUrl: value("inference-base-url")
     });
     print({
       mode: command,

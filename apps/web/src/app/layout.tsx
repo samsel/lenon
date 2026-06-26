@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "KidSafe Hermes Runtime",
-  description: "Child-safe AI assistant platform with Hermes as the explicit backend runtime."
+  title: "Lenon",
+  description: "A parent-governed AI companion for children, powered by isolated Hermes child agents."
 };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {

@@ -74,7 +74,7 @@ export const createSkillManifest = (input: {
   name: input.name,
   creator_id: "creator_internal",
   short_description: input.description,
-  long_description: `${input.description} Runs inside the child's dedicated Hermes agent with parent-approved permissions and safety gates.`,
+  long_description: `${input.description} Runs inside the child's dedicated Lenon agent with parent-approved permissions and Hermes safety gates.`,
   category: input.category,
   age_min: input.ageMin,
   age_max: input.ageMax,
@@ -157,7 +157,7 @@ export const seedSkills: Skill[] = [
   },
   {
     id: "skill_science_explainer",
-    name: "Science Explainer",
+    name: "Science Lab",
     description: "Explore science with safe examples and grown-up check notes for experiments.",
     category: "Science",
     ageMin: 7,
@@ -167,7 +167,7 @@ export const seedSkills: Skill[] = [
     riskLevel: "low",
     manifest: createSkillManifest({
       id: "skill_science_explainer",
-      name: "Science Explainer",
+      name: "Science Lab",
       description: "Age-appropriate science explanations and safe experiments.",
       category: "science",
       ageMin: 7,
@@ -309,7 +309,7 @@ export const seedPolicyEvents: PolicyEvent[] = [
     category: "privacy_pii_protection",
     severity: "low",
     action: "educational_redirect",
-    summary: "Hermes redirected a school-name sharing attempt into a privacy reminder.",
+    summary: "Lenon redirected a school-name sharing attempt into a privacy reminder.",
     createdAt: nowIso()
   },
   {
@@ -319,7 +319,7 @@ export const seedPolicyEvents: PolicyEvent[] = [
     category: "checkpoint_bonus_abuse_prevention",
     severity: "info",
     action: "offer_checkpoint",
-    summary: "Hermes offered Math Quest checkpoint for bonus time within parent cap.",
+    summary: "Lenon offered Math Quest checkpoint for bonus time within parent cap.",
     createdAt: nowIso()
   }
 ];
@@ -328,7 +328,7 @@ export const seedActivity: ActivitySummary[] = [
   {
     childProfileId: "child_ava",
     topics: ["fractions", "planets", "story characters"],
-    skillsUsed: ["Math Quest", "Story Builder", "Science Explainer"],
+    skillsUsed: ["Math Quest", "Story Builder", "Science Lab"],
     learningHighlights: [
       "Explained equivalent fractions with pizza slices.",
       "Wrote a kind robot explorer story.",

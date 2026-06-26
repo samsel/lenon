@@ -51,8 +51,8 @@ export function AppShell({ activePath, children }: { activePath: string; childre
             <BrainCircuit size={24} />
           </span>
           <span className="brand-title">
-            <strong>KidSafe Hermes</strong>
-            <span>Runtime command center</span>
+            <strong>Lenon</strong>
+            <span>Family safety console</span>
           </span>
         </Link>
 
@@ -96,7 +96,12 @@ export function StatusPill({
   children: React.ReactNode;
   tone?: "ok" | "warn" | "danger";
 }) {
-  return <span className={`status-pill ${tone === "warn" ? "warn" : tone === "danger" ? "danger" : ""}`}>{children}</span>;
+  return (
+    <span className={`status-pill ${tone === "warn" ? "warn" : tone === "danger" ? "danger" : ""}`}>
+      <span className="status-dot" aria-hidden="true" />
+      {children}
+    </span>
+  );
 }
 
 export function RouteTitle({ title, subtitle }: { title: string; subtitle: string }) {
@@ -112,16 +117,16 @@ export function RuntimeMap() {
   return (
     <div className="runtime-map" aria-label="Hermes architecture map">
       <div className="runtime-node">
-        <strong>Parent Control Panel</strong>
-        <span>config</span>
+        <strong>Parent policy</strong>
+        <span>settings</span>
       </div>
       <div className="runtime-node">
-        <strong>Hermes Child Agent</strong>
+        <strong>Lenon child space</strong>
         <span>runtime</span>
       </div>
       <div className="runtime-node">
-        <strong>LLM Provider</strong>
-        <span>behind Hermes</span>
+        <strong>Hermes gateway</strong>
+        <span>model + tools</span>
       </div>
     </div>
   );

@@ -91,14 +91,14 @@ This writes `.local/hermes-runtimes/registry.json`, creates the child data direc
 For automatic onboarding in real mode:
 
 ```bash
-HERMES_RUNTIME_MANAGER_KEY=dev-local-secret npm run hermes:runtime-server
+HERMES_RUNTIME_MANAGER_KEY=<local-random-manager-key> npm run hermes:runtime-server
 ```
 
 Set:
 
 ```bash
 HERMES_PROVISIONER_URL=http://127.0.0.1:8787/provision-child
-HERMES_PROVISIONER_KEY=dev-local-secret
+HERMES_PROVISIONER_KEY=<local-random-manager-key>
 ```
 
 See `docs/hermes-runtime-manager.md`.

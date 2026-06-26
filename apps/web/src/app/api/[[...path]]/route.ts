@@ -59,6 +59,9 @@ export async function GET(request: NextRequest, context: RouteContext) {
       const admin = await productStore.adminOverview();
       return ok(admin.prompts);
     }
+    if (area === "admin" && one === "hermes" && two === "runtime-audit") {
+      return ok(await productStore.runtimeAudit());
+    }
     if (area === "admin" && one === "overview") return ok(await productStore.adminOverview());
     if (area === "hermes" && one === "agents" && two) {
       const admin = await productStore.adminOverview();
@@ -83,16 +86,33 @@ export async function POST(request: NextRequest, context: RouteContext) {
       return ok(await productStore.uninstallSkill(one, three));
     }
     if (area === "child" && one === "session" && two === "start") {
-      return ok(await productStore.startChildSession(body.child_profile_id ?? body.childProfileId ?? "child_ava"));
+      return ok(
+        await productStore.startChildSession(body.child_profile_id ?? body.childProfileId ?? "child_ava", {
+          reset: Boolean(body.reset)
+        })
+      );
     }
     if (area === "child" && one === "chat") {
       return ok(
         await productStore.sendChildMessage({
           childProfileId: body.child_profile_id ?? body.childProfileId,
           message: body.message,
+          sessionId: body.session_id ?? body.sessionId,
           skillId: body.skill_id ?? body.skillId,
           clientContext: body.client_context ?? body.clientContext
         })
+      );
+    }
+    if (area === "child" && one === "safety-event") {
+      return ok(
+        await productStore.logClientSafetyEvent({
+          childProfileId: body.child_profile_id ?? body.childProfileId,
+          category: body.category,
+          action: body.action,
+          severity: body.severity,
+          summary: body.summary
+        }),
+        { status: 201 }
       );
     }
     if (area === "child" && one === "checkpoints" && two && three === "submit") {
@@ -106,6 +126,9 @@ export async function POST(request: NextRequest, context: RouteContext) {
     }
     if (area === "admin" && one === "hermes" && two === "evals" && three === "run") {
       return ok(await productStore.runEval(body));
+    }
+    if (area === "admin" && one === "hermes" && two === "runtime-audit" && three === "provision") {
+      return ok(await productStore.provisionChildRuntimes());
     }
     if (area === "hermes" && one === "agents" && two && three === "pause") {
       const family = await productStore.getFamilyOverview();

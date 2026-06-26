@@ -34,7 +34,7 @@ export function CreatorApp({ slug }: { slug: string[] }) {
 function CreatorHome({ skills }: { skills: Skill[] }) {
   return (
     <div className="grid">
-      <RouteTitle title="Creator workspace" subtitle="Build governed skills that run inside child Hermes agents." />
+      <RouteTitle title="Creator workspace" subtitle="Build governed skills that run inside Lenon child agents." />
       <section className="grid three">
         <div className="metric">
           <strong>{skills.length}</strong>
@@ -58,7 +58,7 @@ function CreatorHome({ skills }: { skills: Skill[] }) {
         <Link className="panel" href="/creator/skills/new">
           <FileJson />
           <h2>Manifest editor</h2>
-          <p className="muted">Draft Hermes-compatible skill metadata before submission.</p>
+          <p className="muted">Draft Lenon-compatible skill metadata before submission.</p>
         </Link>
         <Link className="panel" href="/creator/docs">
           <LibraryBig />
@@ -73,7 +73,7 @@ function CreatorHome({ skills }: { skills: Skill[] }) {
 function CreatorSkills({ skills }: { skills: Skill[] }) {
   return (
     <div className="grid">
-      <RouteTitle title="Creator skills" subtitle="Each skill is a Hermes capability package, not a standalone agent." />
+      <RouteTitle title="Creator skills" subtitle="Each skill is a governed capability package, not a standalone agent." />
       <section className="grid three">
         {skills.map((skill) => (
           <article className="panel grid" key={skill.id}>
@@ -100,7 +100,7 @@ function CreatorSkills({ skills }: { skills: Skill[] }) {
 function ManifestEditor() {
   return (
     <div className="grid">
-      <RouteTitle title="Skill manifest editor" subtitle="Draft manifests declare Hermes package IDs, prompt layers, permissions, data access, and evals." />
+      <RouteTitle title="Skill manifest editor" subtitle="Draft manifests declare runtime package IDs, prompt layers, permissions, data access, and evals." />
       <section className="panel grid">
         <div className="field-grid">
           <label className="field">
@@ -131,7 +131,7 @@ function ManifestEditor() {
         </label>
         <div className="button-row">
           <button className="btn">
-            <Send /> Submit for Hermes review
+            <Send /> Submit for review
           </button>
           <button className="btn secondary">
             <Code2 /> Validate manifest
@@ -145,11 +145,11 @@ function ManifestEditor() {
 function CreatorDocs() {
   return (
     <div className="grid">
-      <RouteTitle title="Creator docs" subtitle="Safe skill development rules for the Hermes marketplace." />
+      <RouteTitle title="Creator docs" subtitle="Safe skill development rules for the Lenon marketplace." />
       <section className="grid two">
         <div className="panel">
           <h2>Runtime boundary</h2>
-          <p className="muted">Skills run inside or through Hermes. They cannot call model providers, bypass policy gates, or store arbitrary data.</p>
+          <p className="muted">Skills run inside the Lenon runtime path. They cannot call model providers, bypass policy gates, or store arbitrary data.</p>
         </div>
         <div className="panel">
           <h2>Submission checklist</h2>
@@ -157,7 +157,7 @@ function CreatorDocs() {
         </div>
         <div className="panel">
           <h2>Parent approval</h2>
-          <p className="muted">Approved skills are still installed per child by a parent and scoped to that child's Hermes agent.</p>
+          <p className="muted">Approved skills are still installed per child by a parent and scoped to that child's Lenon agent.</p>
         </div>
         <div className="panel">
           <h2>No child monetization</h2>

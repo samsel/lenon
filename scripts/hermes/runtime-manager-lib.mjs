@@ -131,6 +131,30 @@ export const buildRuntimeSpec = (input, options = {}) => {
   const apiKey = String(options.apiKey ?? input.apiKey ?? existing.apiKey ?? randomBytes(32).toString("hex"));
   const image = String(options.image ?? input.image ?? existing.image ?? "nousresearch/hermes-agent:latest");
   const modelName = String(options.modelName ?? input.modelName ?? existing.modelName ?? profileName);
+  const inferenceModel = String(
+    options.inferenceModel ??
+      input.inferenceModel ??
+      input.inference_model ??
+      existing.inferenceModel ??
+      process.env.HERMES_RUNTIME_INFERENCE_MODEL ??
+      ""
+  );
+  const inferenceProvider = String(
+    options.inferenceProvider ??
+      input.inferenceProvider ??
+      input.inference_provider ??
+      existing.inferenceProvider ??
+      process.env.HERMES_RUNTIME_INFERENCE_PROVIDER ??
+      ""
+  );
+  const inferenceBaseUrl = String(
+    options.inferenceBaseUrl ??
+      input.inferenceBaseUrl ??
+      input.inference_base_url ??
+      existing.inferenceBaseUrl ??
+      process.env.HERMES_RUNTIME_INFERENCE_BASE_URL ??
+      ""
+  );
   const baseUrl = `http://127.0.0.1:${hostPort}`;
   const dataDir = resolve(options.dataDir ?? input.dataDir ?? existing.dataDir ?? join(runtimeDir, "data"));
   const now = existing.createdAt ? nowIso() : nowIso();
@@ -148,6 +172,9 @@ export const buildRuntimeSpec = (input, options = {}) => {
     baseUrl,
     apiKey,
     modelName,
+    inferenceModel,
+    inferenceProvider,
+    inferenceBaseUrl,
     runtimeRoot,
     runtimeDir,
     dataDir,
@@ -204,26 +231,103 @@ const runtimePolicy = (runtime) => ({
   ]
 });
 
+const disabledChildToolsets = [
+  "web",
+  "browser",
+  "terminal",
+  "file",
+  "code_execution",
+  "vision",
+  "video",
+  "image_gen",
+  "video_gen",
+  "x_search",
+  "moa",
+  "tts",
+  "skills",
+  "todo",
+  "memory",
+  "context_engine",
+  "session_search",
+  "clarify",
+  "delegation",
+  "cronjob",
+  "homeassistant",
+  "spotify",
+  "discord",
+  "discord_admin",
+  "yuanbao",
+  "computer_use"
+];
+
+const yamlList = (items, indent = 2) => items.map((item) => `${" ".repeat(indent)}- ${item}`).join("\n");
+
+const yamlScalar = (value) => JSON.stringify(String(value));
+
+const inferenceModelConfig = (runtime) => {
+  if (!runtime.inferenceModel && !runtime.inferenceProvider && !runtime.inferenceBaseUrl) {
+    return "# Configure model.provider/model.default separately after provider setup.\n";
+  }
+  return `model:
+${runtime.inferenceModel ? `  default: ${yamlScalar(runtime.inferenceModel)}\n` : ""}${runtime.inferenceProvider ? `  provider: ${yamlScalar(runtime.inferenceProvider)}\n` : ""}${runtime.inferenceBaseUrl ? `  base_url: ${yamlScalar(runtime.inferenceBaseUrl)}\n` : ""}`;
+};
+
+const kidSafeHermesConfig = (runtime) => `# Lenon-generated conservative defaults for child API runtimes.
+${inferenceModelConfig(runtime)}
+platform_toolsets:
+  cli:
+    - no_mcp
+  api_server:
+    - no_mcp
+known_plugin_toolsets:
+  cli: []
+  api_server: []
+agent:
+  disabled_toolsets:
+${yamlList(disabledChildToolsets, 4)}
+terminal:
+  backend: docker
+  home_mode: profile
+  docker_mount_cwd_to_workspace: false
+  docker_volumes: []
+browser:
+  allow_private_urls: false
+checkpoints:
+  enabled: false
+`;
+
 export const writeRuntimeFiles = (runtime) => {
   mkdirSync(runtime.runtimeDir, { recursive: true });
   mkdirSync(runtime.dataDir, { recursive: true });
   writeFileSync(join(runtime.dataDir, ".env"), runtimeEnv(runtime));
   writeFileSync(join(runtime.dataDir, "SOUL.md"), childSoul(runtime));
   writeJson(join(runtime.dataDir, "KIDSAFE_POLICY.json"), runtimePolicy(runtime));
+  const configPath = join(runtime.dataDir, "config.yaml");
+  if (!existsSync(configPath)) writeFileSync(configPath, kidSafeHermesConfig(runtime));
   writeFileSync(
     join(runtime.dataDir, "KIDSAFE_CONFIG_SNIPPET.yaml"),
-    `# Review and merge into config.yaml after Hermes/provider setup if supported by the installed Hermes version.
+    `# Lenon writes these settings to config.yaml for fresh Docker child runtimes.
+# Review and merge manually if you are adapting an existing Hermes profile.
+platform_toolsets:
+  cli:
+    - no_mcp
+  api_server:
+    - no_mcp
+known_plugin_toolsets:
+  cli: []
+  api_server: []
 terminal:
+  backend: docker
   home_mode: profile
+  docker_mount_cwd_to_workspace: false
+  docker_volumes: []
 agent:
   disabled_toolsets:
-    - terminal
-    - web
-    - browser
-    - code
-    - delegation
-    - cron
-    - memory
+${yamlList(disabledChildToolsets, 4)}
+browser:
+  allow_private_urls: false
+checkpoints:
+  enabled: false
 `
   );
   writeJson(join(runtime.runtimeDir, "runtime.json"), runtime);
@@ -291,8 +395,6 @@ export const createOrStartContainer = (runtime, options = {}) => {
     runtime.cpus,
     "--pids-limit",
     "256",
-    "--cap-drop",
-    "ALL",
     "--security-opt",
     "no-new-privileges",
     "--tmpfs",
@@ -366,6 +468,17 @@ export const checkHermesApi = async (runtime, timeoutMs = 4000) => {
   }
 };
 
+export const waitForHermesApi = async (runtime, timeoutMs = 30000) => {
+  const deadline = Date.now() + timeoutMs;
+  let last = { ok: false, error: "not_checked" };
+  while (Date.now() < deadline) {
+    last = await checkHermesApi(runtime, Math.min(4000, Math.max(1000, deadline - Date.now())));
+    if (last.ok) return last;
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  return last;
+};
+
 export const statusRuntime = async (childProfileId, runtimeRoot = defaultRuntimeRoot()) => {
   const runtime = readRuntimeRecord(childProfileId, runtimeRoot);
   if (!runtime) throw new Error(`No runtime metadata found for ${childProfileId}`);
@@ -437,7 +550,7 @@ export const provisionChildRuntime = async (input, options = {}) => {
 
   if (options.executeDocker) {
     dockerResult = createOrStartContainer(runtime, options);
-    api = await checkHermesApi(runtime, Number(options.healthTimeoutMs ?? 1500));
+    api = await waitForHermesApi(runtime, Number(options.healthTimeoutMs ?? 30000));
   }
 
   const status = api.ok ? "active" : options.executeDocker ? "provisioning" : "provisioning";

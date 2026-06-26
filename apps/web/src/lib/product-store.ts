@@ -16,6 +16,8 @@ import type {
   Family,
   HermesAgentMapping,
   ParentPolicyCache,
+  PolicyEvent,
+  PolicyAction,
   PolicyPreset,
   SkillInstall,
   TranscriptVisibility,
@@ -30,6 +32,7 @@ type ProductState = {
   policyCache: ParentPolicyCache[];
   skillInstalls: SkillInstall[];
   activity: ActivitySummary[];
+  policyEvents: PolicyEvent[];
 };
 
 declare global {
@@ -49,10 +52,15 @@ const getState = () => {
     agentMappings: clone(seedAgentMappings),
     policyCache: clone(seedPolicies),
     skillInstalls: clone(seedSkillInstalls),
-    activity: clone(seedActivity)
+    activity: clone(seedActivity),
+    policyEvents: []
   };
+  globalThis.__kidsafeProductState.policyEvents ??= [];
   return globalThis.__kidsafeProductState;
 };
+
+const mergedPolicyEvents = (localEvents: PolicyEvent[], remoteEvents: PolicyEvent[]) =>
+  [...localEvents, ...remoteEvents].sort((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt));
 
 export const productStore = {
   async health() {
@@ -64,7 +72,7 @@ export const productStore = {
     const state = getState();
     const hermes = createHermesClient();
     const skills = await hermes.listSkills();
-    const events = await hermes.listPolicyEvents();
+    const events = mergedPolicyEvents(state.policyEvents, await hermes.listPolicyEvents());
     const children = await Promise.all(
       state.children.map(async (child) => {
         const mapping = state.agentMappings.find((agent) => agent.childProfileId === child.id);
@@ -151,7 +159,7 @@ export const productStore = {
     const policy = mapping ? await hermes.getPolicy(mapping.hermesAgentId) : null;
     const installs = await hermes.listInstalledSkills(childId);
     const skills = await hermes.listSkills();
-    const events = await hermes.listPolicyEvents();
+    const events = mergedPolicyEvents(state.policyEvents, await hermes.listPolicyEvents());
     const messages = await hermes.getMessages(childId);
     return {
       child,
@@ -237,24 +245,65 @@ export const productStore = {
     return result;
   },
 
-  async startChildSession(childId: string) {
+  async startChildSession(childId: string, options: { reset?: boolean } = {}) {
     const state = getState();
     const mapping = state.agentMappings.find((item) => item.childProfileId === childId);
     if (!mapping) throw new Error("Hermes agent mapping not found.");
-    return createHermesClient().startChildSession({ childProfileId: childId, hermesAgentId: mapping.hermesAgentId });
+    const policy = state.policyCache.find((item) => item.childProfileId === childId);
+    return createHermesClient().startChildSession({
+      childProfileId: childId,
+      hermesAgentId: mapping.hermesAgentId,
+      reset: options.reset,
+      policy
+    });
   },
 
-  async sendChildMessage(input: { childProfileId: string; message: string; skillId?: string; clientContext?: Record<string, unknown> }) {
+  async sendChildMessage(input: {
+    childProfileId: string;
+    message: string;
+    sessionId?: string;
+    skillId?: string;
+    clientContext?: Record<string, unknown>;
+  }) {
     const state = getState();
     const mapping = state.agentMappings.find((item) => item.childProfileId === input.childProfileId);
     if (!mapping) throw new Error("Hermes agent mapping not found.");
+    const policy = state.policyCache.find((item) => item.childProfileId === input.childProfileId);
     return createHermesClient().sendChildMessage({
       childProfileId: input.childProfileId,
       hermesAgentId: mapping.hermesAgentId,
       message: input.message,
+      sessionId: input.sessionId,
       skillId: input.skillId,
-      clientContext: input.clientContext
+      clientContext: input.clientContext,
+      policy
     });
+  },
+
+  async logClientSafetyEvent(input: {
+    childProfileId: string;
+    category: string;
+    action: PolicyAction;
+    severity?: PolicyEvent["severity"];
+    summary: string;
+  }) {
+    const state = getState();
+    const mapping = state.agentMappings.find((item) => item.childProfileId === input.childProfileId);
+    if (!mapping) throw new Error("Hermes agent mapping not found.");
+    const event: PolicyEvent = {
+      id: id("policy_event"),
+      hermesAgentId: mapping.hermesAgentId,
+      childProfileId: input.childProfileId,
+      category: input.category,
+      severity: input.severity ?? "low",
+      action: input.action,
+      summary: input.summary,
+      createdAt: nowIso()
+    };
+    state.policyEvents.unshift(event);
+    const activity = state.activity.find((summary) => summary.childProfileId === input.childProfileId);
+    if (activity) activity.safetyRedirects += 1;
+    return event;
   },
 
   async submitCheckpoint(input: { childProfileId: string; checkpointId: string; answer: string }) {
@@ -270,6 +319,7 @@ export const productStore = {
   },
 
   async adminOverview() {
+    const state = getState();
     const hermes = createHermesClient();
     const [agents, events, evalRuns, prompts, health] = await Promise.all([
       hermes.listAgents(),
@@ -278,7 +328,33 @@ export const productStore = {
       hermes.listPrompts(),
       hermes.health()
     ]);
-    return { agents, events, evalRuns, prompts, health };
+    return { agents, events: mergedPolicyEvents(state.policyEvents, events), evalRuns, prompts, health };
+  },
+
+  async runtimeAudit() {
+    return createHermesClient().auditRuntimes();
+  },
+
+  async provisionChildRuntimes() {
+    const state = getState();
+    const hermes = createHermesClient();
+    const results = await hermes.provisionConfiguredChildren(
+      state.children.map((child) => ({
+        familyId: state.family.id,
+        childProfileId: child.id,
+        nickname: child.nickname,
+        ageBand: child.ageBand,
+        readingLevel: child.readingLevel,
+        interests: child.interests,
+        learningGoals: child.learningGoals,
+        parentPolicyPreset:
+          state.policyCache.find((policy) => policy.childProfileId === child.id)?.dailyTimeLimitMinutes === 25
+            ? "strict"
+            : "balanced"
+      }))
+    );
+    const audits = await hermes.auditRuntimes();
+    return { results, audits };
   },
 
   async runEval(input: { suiteId: string; target: "child_agent" | "skill" | "prompt_stack"; hermesAgentId?: string }) {

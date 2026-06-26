@@ -121,19 +121,19 @@ function HomeView({ data, loading, refresh }: { data: FamilyOverview | null; loa
       <section className="hero-band">
         <div>
           <StatusPill>
-            <Bot size={14} /> Hermes {data?.hermes.status ?? "checking"}
+            <Bot size={14} /> Runtime {data?.hermes.status ?? "checking"}
           </StatusPill>
           <h1>{data?.family.name ?? "Family Control Panel"}</h1>
           <p>
-            Configure child profiles, policies, skills, checkpoints, visibility, and safety reporting while Hermes remains the
-            runtime source of truth.
+            Configure Lenon child spaces, policies, skills, checkpoints, visibility, and safety reporting while Hermes remains
+            the runtime source of truth.
           </p>
           <div className="button-row">
             <Link className="btn" href="/parent/onboarding">
               <Plus /> Add child
             </Link>
             <button className="btn secondary" onClick={() => void refresh()}>
-              <RefreshCcw /> Refresh Hermes
+              <RefreshCcw /> Refresh runtime
             </button>
           </div>
         </div>
@@ -147,7 +147,7 @@ function HomeView({ data, loading, refresh }: { data: FamilyOverview | null; loa
         </div>
         <div className="metric">
           <strong>{child?.agent?.status ?? "none"}</strong>
-          <span>active agent state</span>
+          <span>Lenon agent state</span>
         </div>
         <div className="metric">
           <strong>{child?.activity?.timeUsedMinutes ?? 0}m</strong>
@@ -155,7 +155,7 @@ function HomeView({ data, loading, refresh }: { data: FamilyOverview | null; loa
         </div>
         <div className="metric">
           <strong>{child?.safetyEvents.length ?? 0}</strong>
-          <span>Hermes policy events</span>
+          <span>safety events</span>
         </div>
       </section>
 
@@ -180,7 +180,7 @@ function HomeView({ data, loading, refresh }: { data: FamilyOverview | null; loa
             </div>
             <div className="button-row">
               <Link className="btn secondary" href={`/parent/children/${item.id}/hermes-agent`}>
-                <Bot /> Agent
+                <Bot /> Lenon agent
               </Link>
               <Link className="btn secondary" href={`/parent/children/${item.id}/policy`}>
                 <ShieldCheck /> Policy
@@ -225,8 +225,8 @@ function OnboardingView({ onDone }: { onDone: () => Promise<void> }) {
   return (
     <div className="grid">
       <RouteTitle
-        title="Parent onboarding"
-        subtitle="Create a child profile and provision one vertically isolated Hermes child agent."
+        title="Lenon onboarding"
+        subtitle="Create a child profile and provision one isolated Lenon agent backed by Hermes."
       />
       <section className="panel">
         <form className="grid" onSubmit={submit}>
@@ -274,7 +274,7 @@ function OnboardingView({ onDone }: { onDone: () => Promise<void> }) {
             <textarea value={form.familyValues} onChange={(event) => setForm({ ...form, familyValues: event.target.value })} />
           </label>
           <button className="btn" disabled={saving}>
-            <Plus /> {saving ? "Provisioning Hermes agent..." : "Create profile and provision Hermes agent"}
+            <Plus /> {saving ? "Provisioning Lenon agent..." : "Create profile and provision Lenon"}
           </button>
         </form>
       </section>
@@ -283,7 +283,7 @@ function OnboardingView({ onDone }: { onDone: () => Promise<void> }) {
           <div className="panel-header">
             <div>
               <h2>{created.child.nickname} is ready</h2>
-              <p className="muted">Hermes agent {created.mapping.hermesAgentId} is active and isolated to this child.</p>
+              <p className="muted">Lenon is active for this child through Hermes profile {created.mapping.hermesAgentId}.</p>
             </div>
             <StatusPill>
               <Check size={14} /> active
@@ -310,12 +310,12 @@ function HermesAgentView({
     await refresh();
   };
 
-  if (!child && loading) return <div className="empty-state">Loading Hermes agent...</div>;
-  if (!child?.agent) return <div className="empty-state">No Hermes agent mapping found.</div>;
+  if (!child && loading) return <div className="empty-state">Loading Lenon agent...</div>;
+  if (!child?.agent) return <div className="empty-state">No Lenon agent mapping found.</div>;
 
   return (
     <div className="grid">
-      <RouteTitle title={`${child.nickname}'s Hermes agent`} subtitle="Runtime state is read from Hermes, not reconstructed in the app." />
+      <RouteTitle title={`${child.nickname}'s Lenon agent`} subtitle="Runtime state is read from Hermes, not reconstructed in the app." />
       <section className="grid three">
         <div className="metric">
           <strong>{child.agent.status}</strong>
@@ -327,7 +327,7 @@ function HermesAgentView({
         </div>
         <div className="metric">
           <strong>{child.agent.installedSkillIds.length}</strong>
-          <span>Hermes-attached skills</span>
+          <span>attached skills</span>
         </div>
       </section>
       <section className="panel grid">
@@ -390,7 +390,7 @@ function PolicyView({
 
   return (
     <div className="grid">
-      <RouteTitle title={`${child.nickname}'s policy controls`} subtitle="Edits are pushed to Hermes as parent policy overlay updates." />
+      <RouteTitle title={`${child.nickname}'s policy controls`} subtitle="Edits are pushed into the Hermes parent policy overlay." />
       <section className="panel grid">
         <div className="field-grid">
           <label className="field">
@@ -454,7 +454,7 @@ function PolicyView({
           <textarea value={policy.familyValues} onChange={(event) => setPolicy({ ...policy, familyValues: event.target.value })} />
         </label>
         <button className="btn" onClick={save} disabled={saving}>
-          <Send /> {saving ? "Pushing to Hermes..." : "Push policy overlay to Hermes"}
+          <Send /> {saving ? "Saving policy..." : "Save policy overlay"}
         </button>
       </section>
     </div>
@@ -489,7 +489,7 @@ function SkillsView({
 
   return (
     <div className="grid">
-      <RouteTitle title="Skill marketplace approvals" subtitle="Skills attach to the child's Hermes agent and inherit Hermes gates." />
+      <RouteTitle title="Skill marketplace approvals" subtitle="Skills attach to the child's Lenon agent and inherit Hermes gates." />
       <section className="grid three">
         {skills.map((skill) => (
           <article className="panel grid" key={skill.id}>
@@ -506,7 +506,7 @@ function SkillsView({
               <span className="chip">{skill.riskLevel} risk</span>
             </div>
             <button className="btn secondary" onClick={() => void toggle(skill)}>
-              <Store /> {installed.has(skill.id) ? "Uninstall from Hermes" : "Install through Hermes"}
+              <Store /> {installed.has(skill.id) ? "Remove from Lenon" : "Install for Lenon"}
             </button>
           </article>
         ))}
@@ -520,7 +520,7 @@ function ActivityView({ child, loading }: { child: FamilyChild | null; loading: 
   if (!child?.activity) return <div className="empty-state">No activity summary yet.</div>;
   return (
     <div className="grid">
-      <RouteTitle title={`${child.nickname}'s activity summary`} subtitle="Parent-friendly summaries come from Hermes logs and events." />
+      <RouteTitle title={`${child.nickname}'s activity summary`} subtitle="Parent-friendly summaries come from Lenon activity and Hermes events." />
       <section className="grid three">
         <div className="metric">
           <strong>{child.activity.timeUsedMinutes}m</strong>
@@ -582,7 +582,7 @@ function RewardsView({ child, loading }: { child: FamilyChild | null; loading: b
   if (!child && loading) return <div className="empty-state">Loading rewards...</div>;
   return (
     <div className="grid">
-      <RouteTitle title="Rewards and checkpoints" subtitle="Bonus time is granted only through Hermes and parent caps." />
+      <RouteTitle title="Rewards and checkpoints" subtitle="Bonus time is granted only through Lenon checkpoints and parent caps." />
       <section className="grid three">
         <div className="panel">
           <Trophy />
@@ -609,7 +609,7 @@ function ChildSettingsView({ child, loading }: { child: FamilyChild | null; load
   if (!child) return <div className="empty-state">No child profile found.</div>;
   return (
     <div className="grid">
-      <RouteTitle title={`${child.nickname}'s profile`} subtitle="Product metadata stays separate from Hermes runtime behavior." />
+      <RouteTitle title={`${child.nickname}'s profile`} subtitle="Product metadata stays separate from runtime behavior." />
       <section className="panel grid">
         <div className="field-grid">
           <div className="metric">
@@ -637,7 +637,7 @@ function AlertsView({ data, loading }: { data: FamilyOverview | null; loading: b
   const events = data?.children.flatMap((child) => child.safetyEvents.map((event) => ({ ...event, childName: child.nickname }))) ?? [];
   return (
     <div className="grid">
-      <RouteTitle title="Parent alerts" subtitle="Immediate alerts are reserved for high-signal Hermes policy events." />
+      <RouteTitle title="Parent alerts" subtitle="Immediate alerts are reserved for high-signal Lenon safety events." />
       <section className="panel grid">
         {loading ? <div className="empty-state">Loading alerts...</div> : null}
         {events.map((event) => (

@@ -80,7 +80,10 @@ const server = createServer(async (request, response) => {
         memory: body.memory,
         cpus: body.cpus,
         modelName: body.modelName,
-        healthTimeoutMs: process.env.HERMES_RUNTIME_MANAGER_HEALTH_TIMEOUT_MS ?? 1500
+        inferenceModel: body.inferenceModel ?? body.inference_model ?? process.env.HERMES_RUNTIME_INFERENCE_MODEL,
+        inferenceProvider: body.inferenceProvider ?? body.inference_provider ?? process.env.HERMES_RUNTIME_INFERENCE_PROVIDER,
+        inferenceBaseUrl: body.inferenceBaseUrl ?? body.inference_base_url ?? process.env.HERMES_RUNTIME_INFERENCE_BASE_URL,
+        healthTimeoutMs: process.env.HERMES_RUNTIME_MANAGER_HEALTH_TIMEOUT_MS ?? 30000
       });
       send(response, 201, {
         mapping: result.mapping,
@@ -132,4 +135,3 @@ server.listen(port, host, () => {
   console.log(`Runtime root: ${runtimeRoot}`);
   console.log(`Registry file: ${registryPathFor(runtimeRoot)}`);
 });
-
