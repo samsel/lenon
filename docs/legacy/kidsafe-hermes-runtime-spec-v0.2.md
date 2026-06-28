@@ -1,3 +1,11 @@
+# Legacy Document Notice
+
+This document is archived historical context. It is superseded by the Lenon Spec Kit source of truth in `specs/`, especially `specs/README.md`, `specs/001-spec-governance/spec.md`, and `specs/002-product-baseline/spec.md`.
+
+Do not treat this file as the current product specification. When this document conflicts with the Lenon constitution or any active feature spec, the constitution and active feature spec win.
+
+---
+
 # KidSafe Hermes Runtime — Product & Technical Specification
 
 **Status:** Draft v0.2 — Hermes-explicit architecture  
@@ -1980,23 +1988,23 @@ Important: `packages/hermes-client` is a typed wrapper around Hermes APIs. It is
 
 # 25. Environment Variables
 
-```bash
-DATABASE_URL=
-REDIS_URL=
-JWT_SECRET=
-PARENT_SESSION_SECRET=
-HERMES_API_BASE_URL=
-HERMES_API_KEY=
-HERMES_PROJECT_ID=
-HERMES_DEFAULT_MODEL_ROUTE_CHILD_6_8=
-HERMES_DEFAULT_MODEL_ROUTE_CHILD_9_12=
-HERMES_DEFAULT_MODEL_ROUTE_TEEN=
-S3_BUCKET=
-S3_ACCESS_KEY=
-S3_SECRET_KEY=
-EMAIL_PROVIDER_API_KEY=
-SENTRY_DSN=
-```
+Expected variable names, with values supplied only through local or deployed environment configuration:
+
+- `DATABASE_URL`
+- `REDIS_URL`
+- `JWT_SECRET`
+- `PARENT_SESSION_SECRET`
+- `HERMES_API_BASE_URL`
+- `HERMES_API_KEY`
+- `HERMES_PROJECT_ID`
+- `HERMES_DEFAULT_MODEL_ROUTE_CHILD_6_8`
+- `HERMES_DEFAULT_MODEL_ROUTE_CHILD_9_12`
+- `HERMES_DEFAULT_MODEL_ROUTE_TEEN`
+- `S3_BUCKET`
+- `S3_ACCESS_KEY`
+- `S3_SECRET_KEY`
+- `EMAIL_PROVIDER_API_KEY`
+- `SENTRY_DSN`
 
 Do not include `OPENAI_API_KEY` or other LLM provider keys in app env unless Hermes specifically requires local development passthrough. Provider keys should live in Hermes configuration, not in the parent or child app.
 
