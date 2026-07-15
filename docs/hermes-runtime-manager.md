@@ -89,7 +89,39 @@ npm run hermes:runtime -- destroy --child-id child_ava
 
 Use `--remove-files` with `destroy` only when you intentionally want to delete the child runtime directory.
 
-## Use Local Ollama/Gemma
+## Verify The Runtime Contract
+
+The fastest check does not require Docker, Hermes, Ollama, OpenAI, or secrets:
+
+```bash
+npm run test:runtime
+```
+
+This creates a temporary child runtime plan, verifies the registry and generated child config contract, and deletes the temporary files.
+
+## Configure A Model Provider
+
+The runtime manager does not force Ollama as the only backend. It accepts provider configuration from CLI options or provisioner environment variables:
+
+```bash
+--inference-model <provider-model-name>
+--inference-provider <hermes-provider-id>
+--inference-base-url <optional-openai-compatible-base-url>
+```
+
+For the provisioner server, use:
+
+```bash
+HERMES_RUNTIME_INFERENCE_MODEL=<provider-model-name>
+HERMES_RUNTIME_INFERENCE_PROVIDER=<hermes-provider-id>
+HERMES_RUNTIME_INFERENCE_BASE_URL=<optional-openai-compatible-base-url>
+```
+
+The open-source default is unconfigured. Operators choose Ollama, OpenAI Platform, Bedrock, or another Hermes-supported provider through local/deployment configuration. Do not commit provider keys, Codex OAuth sessions, `~/.codex/auth.json`, Codex access tokens, or other personal credentials.
+
+OpenAI Codex OAuth is for Codex local tooling and trusted Codex workflows. It should not be Lenon's default child runtime credential. If an operator uses an OpenAI-hosted model for Hermes, prefer secret-managed OpenAI Platform/API credentials or a Hermes-supported provider integration.
+
+## Use Local Ollama/Gemma As One Provider Option
 
 For local development, a child Hermes container can use Ollama running on the host machine through Ollama's OpenAI-compatible API.
 
@@ -182,6 +214,8 @@ npm run hermes:runtime-server
 ```
 
 These values are deployment configuration. Keep them in local env or secret managers, not in committed files.
+
+For another provider, keep the same variables and substitute the operator-selected model/provider/base URL values. Keep credentials in Hermes profile configuration, local env, or a secret manager.
 
 ## Production Notes
 

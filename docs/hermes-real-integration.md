@@ -18,6 +18,8 @@ Child account
   -> model provider configured inside that profile
 ```
 
+The model provider is configurable. Ollama through an OpenAI-compatible local endpoint is one local option, not the only option and not a committed default. The repository default is provider-unconfigured until the operator supplies local/deployment configuration. Do not use a personal OpenAI Codex OAuth session, `~/.codex/auth.json`, or Codex access token as Lenon's default child runtime credential.
+
 The browser never receives Hermes API tokens. The Next.js API routes resolve `child_profile_id` to the configured Hermes profile and call Hermes server-to-server.
 
 ## Environment
@@ -34,16 +36,24 @@ For the local Docker Runtime Manager path:
 HERMES_PROFILE_REGISTRY_FILE=.local/hermes-runtimes/registry.json
 ```
 
-For one profile:
+Optional provider defaults for the runtime manager/provisioner:
 
 ```bash
-HERMES_AGENT_ID=hermes_profile_child_ava
-HERMES_CHILD_PROFILE_ID=child_ava
-HERMES_PROFILE_NAME=child_ava
-HERMES_API_BASE_URL=http://127.0.0.1:8643
-HERMES_API_KEY=replace-with-profile-api-key
-HERMES_MODEL_NAME=child_ava
+HERMES_RUNTIME_INFERENCE_MODEL=<provider-model-name>
+HERMES_RUNTIME_INFERENCE_PROVIDER=<hermes-provider-id>
+HERMES_RUNTIME_INFERENCE_BASE_URL=<optional-openai-compatible-base-url>
 ```
+
+These are deployment settings. Any provider credentials belong in local env, Hermes profile secret configuration, or a secret manager.
+
+For one profile, configure these values in local env or a secret manager:
+
+- `HERMES_AGENT_ID`: `hermes_profile_child_ava`
+- `HERMES_CHILD_PROFILE_ID`: `child_ava`
+- `HERMES_PROFILE_NAME`: `child_ava`
+- `HERMES_API_BASE_URL`: `http://127.0.0.1:8643`
+- `HERMES_API_KEY`: profile API key from the child runtime
+- `HERMES_MODEL_NAME`: `child_ava`
 
 For many children, use the registry:
 
@@ -153,6 +163,8 @@ Implemented:
 
 - server-side `child_profile_id -> hermes profile runtime` resolution
 - real `/v1/responses` calls for child chat
+- safe child fallback when a configured real runtime is missing, offline, slow, or errors
+- configurable runtime-manager inference provider settings
 - stable `X-Hermes-Session-Id`
 - stable `X-Hermes-Session-Key`
 - file-based runtime registry via `HERMES_PROFILE_REGISTRY_FILE`

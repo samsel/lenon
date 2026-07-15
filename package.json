@@ -12,6 +12,7 @@
     "start": "npm --workspace apps/web run start",
     "lint": "npm --workspace apps/web run lint",
     "typecheck": "npm --workspace apps/web run typecheck",
+    "test:runtime": "node scripts/hermes/runtime-contract-smoke.mjs",
     "verify": "npm run typecheck && npm run build",
     "hermes:provision-child": "node scripts/hermes/provision-child-profile.mjs",
     "hermes:runtime": "node scripts/hermes/runtime-manager.mjs",

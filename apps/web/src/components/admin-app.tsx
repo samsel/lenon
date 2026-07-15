@@ -255,11 +255,15 @@ function RuntimeAuditView() {
           <details className="toolset-detail">
             <summary>API-server toolsets</summary>
             <div className="chip-list">
-              {audit.apiServerToolsets.map((toolset) => (
-                <span className="chip" key={toolset.name}>
-                  {toolset.enabled ? "on" : "off"}: {toolset.name}
-                </span>
-              ))}
+              {audit.apiServerToolsets.length ? (
+                audit.apiServerToolsets.map((toolset) => (
+                  <span className="chip" key={toolset.name}>
+                    {toolset.enabled ? "on" : "off"}: {toolset.name}
+                  </span>
+                ))
+              ) : (
+                <span className="chip">not reported</span>
+              )}
             </div>
           </details>
         </section>

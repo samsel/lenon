@@ -17,6 +17,7 @@ import type {
   Checkpoint,
   EvalRun,
   HermesAgentMapping,
+  HermesAgentStatus,
   ParentPolicyCache,
   PolicyAction,
   PolicyEvent,
@@ -361,6 +362,50 @@ const policyResponseFor = (
   };
 };
 
+const runtimeUnavailableResponse = (
+  state: HermesDemoState,
+  input: HermesChatInput,
+  detail: string,
+  options: { storeChildMessage?: boolean } = {}
+): HermesChatResponse => {
+  const messages = (state.messages[input.childProfileId] ??= [introMessage()]);
+  if (options.storeChildMessage) messages.push(childMessageFor(input));
+  const assistantMessage: ChatMessage = {
+    id: id("msg_runtime_fallback"),
+    role: "assistant",
+    content:
+      "Lenon is having trouble reaching your learning helper right now. I saved the safe part of this turn, and you can try again in a moment or ask a grown-up for help.",
+    skillId: input.skillId,
+    policyAction: "educational_redirect",
+    createdAt: nowIso()
+  };
+  messages.push(assistantMessage);
+
+  logPolicyEvent(state, {
+    hermesAgentId: input.hermesAgentId,
+    childProfileId: input.childProfileId,
+    category: "runtime_unavailable",
+    severity: "medium",
+    action: "educational_redirect",
+    summary: `Real Hermes runtime could not complete an allowed child turn. ${detail}`
+  });
+
+  return {
+    messageId: assistantMessage.id,
+    hermesAgentId: input.hermesAgentId,
+    response: assistantMessage.content,
+    policyAction: "educational_redirect",
+    assistantMessage,
+    skillState: {
+      hermesRuntime: "unavailable",
+      fallback: true
+    },
+    rewards: [],
+    checkpoint: null,
+    timeRemainingSeconds: 900
+  };
+};
+
 const registrySource = () => {
   if (process.env.HERMES_PROFILE_REGISTRY_FILE) return "file" as const;
   if (process.env.HERMES_PROFILE_REGISTRY) return "env" as const;
@@ -572,6 +617,45 @@ const buildRuntimeAudit = async (hermesAgentId: string, runtime: HermesRuntimeCo
   };
 };
 
+const buildMissingRuntimeAudit = (agent: HermesAgentMapping): RuntimeAudit => ({
+  childProfileId: agent.childProfileId,
+  hermesAgentId: agent.hermesAgentId,
+  profileName: agent.hermesProfileName,
+  modelName: agent.activeModelRoute,
+  baseUrl: "not configured",
+  containerRunning: null,
+  apiReachable: false,
+  terminalBackend: "unknown",
+  dockerSocket: "unknown",
+  apiServerToolsets: [],
+  disabledToolsets: [],
+  secrets: {
+    apiKeyConfigured: false,
+    apiKeyExposed: false,
+    registrySource: registrySource()
+  },
+  checks: [
+    {
+      id: "runtime_registry_entry",
+      label: "Runtime registry entry configured",
+      status: "fail",
+      detail: "No real Hermes runtime registry entry exists for this expected child agent."
+    },
+    {
+      id: "secrets_redacted",
+      label: "Secrets stay server-side",
+      status: "pass",
+      detail: "No runtime secret values are returned by this missing-runtime audit."
+    }
+  ],
+  auditedAt: nowIso()
+});
+
+const errorSummary = (error: unknown) => {
+  const message = error instanceof Error ? error.message : String(error);
+  return message.replace(/Bearer\s+[A-Za-z0-9._~+/-]+=*/g, "Bearer [redacted]").slice(0, 180);
+};
+
 const createDemoHermesClient = () => {
   const state = getState();
 
@@ -779,8 +863,6 @@ const createDemoHermesClient = () => {
       const policy = input.policy ?? findPolicy(state, input.hermesAgentId);
       state.activeSessions[input.childProfileId] ??= input.sessionId ?? newSessionId(input.childProfileId);
       const messages = (state.messages[input.childProfileId] ??= [introMessage()]);
-      const childMessage = childMessageFor(input);
-      messages.push(childMessage);
 
       if (agent.status !== "active") {
         const blocked: ChatMessage = {
@@ -812,6 +894,8 @@ const createDemoHermesClient = () => {
       if (detected.action !== "allow") {
         return policyResponseFor(state, input, policy, detected.action, detected.category, skill);
       }
+      const childMessage = childMessageFor(input);
+      messages.push(childMessage);
       const response = responseFor(input.message, detected.action, skill, policy);
       const rewards: RewardEvent[] = [
         {
@@ -1058,7 +1142,7 @@ const runtimeFor = (hermesAgentId: string) => {
   return runtime;
 };
 
-const hermesJson = async <T>(runtime: HermesRuntimeConfig, path: string, init?: RequestInit) => {
+const hermesJson = async <T>(runtime: HermesRuntimeConfig, path: string, init?: RequestInit, timeoutMs = 120000) => {
   const response = await fetch(`${runtime.baseUrl}${path}`, {
     ...init,
     headers: {
@@ -1066,7 +1150,7 @@ const hermesJson = async <T>(runtime: HermesRuntimeConfig, path: string, init?: 
       "content-type": "application/json",
       ...(init?.headers ?? {})
     },
-    signal: AbortSignal.timeout(120000)
+    signal: AbortSignal.timeout(timeoutMs)
   });
   if (!response.ok) {
     const body = await response.text().catch(() => "");
@@ -1116,10 +1200,24 @@ const createRealHermesClient = () => {
           ]
         };
       }
-      const first = runtimes[0];
-      await hermesJson<unknown>(first, "/v1/models", { method: "GET" });
+      const healthChecks = await Promise.allSettled(
+        runtimes.map((runtime) => hermesJson<unknown>(runtime, "/v1/models", { method: "GET" }, 6000))
+      );
+      const reachable = healthChecks.filter((result) => result.status === "fulfilled").length;
+      if (!reachable) {
+        return {
+          status: "degraded",
+          mode: "real-hermes-profile-api",
+          projectId: process.env.HERMES_PROJECT_ID ?? "kidsafe-hermes",
+          guarantees: [
+            "Real Hermes mode is enabled, but configured child profile API servers are not reachable.",
+            "Child chat fails closed with a gentle fallback when a runtime is unavailable.",
+            "The browser never receives Hermes API tokens."
+          ]
+        };
+      }
       return {
-        status: "ok",
+        status: reachable === runtimes.length ? "ok" : "degraded",
         mode: "real-hermes-profile-api",
         projectId: process.env.HERMES_PROJECT_ID ?? "kidsafe-hermes",
         guarantees: [
@@ -1280,36 +1378,45 @@ const createRealHermesClient = () => {
     },
 
     async startChildSession(input: HermesSessionInput) {
-      const runtime = runtimeFor(input.hermesAgentId);
       const state = getState();
       const policy = input.policy ?? state.policies.find((item) => item.hermesAgentId === input.hermesAgentId);
       if (input.reset || !state.activeSessions[input.childProfileId]) {
         state.activeSessions[input.childProfileId] = newSessionId(input.childProfileId);
         state.messages[input.childProfileId] = [introMessage()];
       }
+      let intro =
+        "Lenon is getting your learning helper ready. You can try again in a moment, and I will keep things safe while it reconnects.";
+      let status: HermesAgentStatus = "provisioning";
+      try {
+        const runtime = runtimeFor(input.hermesAgentId);
+        intro = `Connected to Hermes profile ${runtime.profileName}.`;
+        status = "active";
+      } catch {
+        status = "provisioning";
+      }
       return {
         sessionId: state.activeSessions[input.childProfileId],
-        status: "active" as const,
+        status,
         timeRemainingSeconds: (policy?.sessionLimitMinutes ?? 15) * 60,
-        intro: `Connected to Hermes profile ${runtime.profileName}.`
+        intro
       };
     },
 
     async sendChildMessage(input: HermesChatInput): Promise<HermesChatResponse> {
-      const runtime = runtimeFor(input.hermesAgentId);
       const state = getState();
       const policy = input.policy ?? state.policies.find((item) => item.hermesAgentId === input.hermesAgentId);
       if (!policy) throw new Error(`Hermes policy not found for ${input.hermesAgentId}`);
       const messages = (state.messages[input.childProfileId] ??= [introMessage()]);
       const sessionId = input.sessionId ?? state.activeSessions[input.childProfileId] ?? newSessionId(input.childProfileId);
       state.activeSessions[input.childProfileId] = sessionId;
-      messages.push(childMessageFor(input));
 
       const baseAgent = await mirror.getAgent(input.hermesAgentId).catch(() => undefined);
+      const registryRuntime = parseRuntimeRegistry()[input.hermesAgentId];
       const agent =
-        realAgentOverrides[input.hermesAgentId] ?? registryAgentMapping(input.hermesAgentId, runtime, baseAgent);
+        realAgentOverrides[input.hermesAgentId] ??
+        (registryRuntime ? registryAgentMapping(input.hermesAgentId, registryRuntime, baseAgent) : baseAgent);
       const skill = input.skillId ? state.skills.find((item) => item.id === input.skillId) : undefined;
-      const skillNotInstalled = input.skillId && !agent.installedSkillIds.includes(input.skillId);
+      const skillNotInstalled = input.skillId && !agent?.installedSkillIds.includes(input.skillId);
       const detected = skillNotInstalled
         ? { action: "ask_parent_permission" as PolicyAction, category: "skill_permission_sandbox" }
         : detectPolicyAction(input.message, policy);
@@ -1317,19 +1424,37 @@ const createRealHermesClient = () => {
         return policyResponseFor(state, input, policy, detected.action, detected.category, skill);
       }
 
-      const response = await hermesJson<{ id: string }>(runtime, "/v1/responses", {
-        method: "POST",
-        headers: {
-          "X-Hermes-Session-Id": sessionId,
-          "X-Hermes-Session-Key": `agent:main:kidsafe:dm:${input.childProfileId}:${sessionId}`
-        },
-        body: JSON.stringify({
-          model: runtime.modelName ?? runtime.profileName,
-          input: input.message,
-          conversation: sessionId,
-          store: true
-        })
-      });
+      let runtime: HermesRuntimeConfig;
+      try {
+        runtime = runtimeFor(input.hermesAgentId);
+      } catch (error) {
+        return runtimeUnavailableResponse(state, input, `Runtime configuration missing: ${errorSummary(error)}`);
+      }
+
+      let response: { id: string };
+      try {
+        messages.push(childMessageFor(input));
+        response = await hermesJson<{ id: string }>(
+          runtime,
+          "/v1/responses",
+          {
+            method: "POST",
+            headers: {
+              "X-Hermes-Session-Id": sessionId,
+              "X-Hermes-Session-Key": `agent:main:kidsafe:dm:${input.childProfileId}:${sessionId}`
+            },
+            body: JSON.stringify({
+              model: runtime.modelName ?? runtime.profileName,
+              input: input.message,
+              conversation: sessionId,
+              store: true
+            })
+          },
+          Number(process.env.HERMES_CHILD_CHAT_TIMEOUT_MS ?? 20000)
+        );
+      } catch (error) {
+        return runtimeUnavailableResponse(state, input, `Runtime call failed: ${errorSummary(error)}`);
+      }
       const content = extractResponseText(response);
       const assistantMessage: ChatMessage = {
         id: response.id ?? id("hermes_msg"),
@@ -1389,7 +1514,13 @@ const createRealHermesClient = () => {
 
     async auditRuntimes(): Promise<RuntimeAudit[]> {
       const registry = parseRuntimeRegistry();
-      return Promise.all(Object.entries(registry).map(([hermesAgentId, runtime]) => buildRuntimeAudit(hermesAgentId, runtime)));
+      const configured = await Promise.all(Object.entries(registry).map(([hermesAgentId, runtime]) => buildRuntimeAudit(hermesAgentId, runtime)));
+      const configuredIds = new Set(Object.keys(registry));
+      const agents = await this.listAgents();
+      const missing = agents
+        .filter((agent) => !configuredIds.has(agent.hermesAgentId))
+        .map((agent) => buildMissingRuntimeAudit(agent));
+      return [...configured, ...missing];
     },
 
     async provisionConfiguredChildren(children?: CreateChildAgentInput[]): Promise<RuntimeProvisionResult[]> {
